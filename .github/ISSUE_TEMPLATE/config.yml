@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Building the guest image
+    url: https://chefkiss.dev/guides/inferno/
+    about: The guest image is made by ChefKiss's guide. Start there for questions about building it.

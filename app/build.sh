@@ -58,16 +58,9 @@ KEYMAPS="${INFERNO_KEYMAPS:-/opt/homebrew/share/qemu/keymaps}"
 mkdir -p "$APP/qemu-data"
 cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 
-# Boot splash. The stock lookup resolves to a path outside the app bundle, so
-# the file is placed where the data-directory fallback will find it.
-ICONS="${INFERNO_ICONS:-}"
-if [ -z "$ICONS" ]; then
-    for candidate in "$ROOT/../inferno-src/ui/icons" "$ROOT/../src/inferno/ui/icons"; do
-        [ -d "$candidate" ] && ICONS="$candidate" && break
-    done
-fi
-mkdir -p "$APP/qemu-data/icons"
-cp "$ICONS/CKQEMUBootSplash_512x512@2x.png" "$APP/qemu-data/icons/CKQEMUBootSplash@2x.png"
+# No boot splash. Inferno's splash artwork belongs to ChefKiss and may not be
+# shipped in derivative builds (ui/icons/CKBrandingNotice.md in the emulator
+# tree); the fork starts without it.
 
 # App icon. Icon Composer's .icon bundle is what actool takes now: it renders
 # the layers into Assets.car for iOS 26's glass treatment and drops flat PNGs
@@ -104,7 +97,10 @@ codesign --force --sign - --timestamp=none \
 
 echo "==> Упаковка"
 cd "$BUILD"
-zip -qry "$ROOT/Inferno.ipa" Payload
+# zip adds to an existing archive instead of replacing it, which would carry
+# files from an earlier build into this one.
+rm -f "$ROOT/Inferno.ipa"
+zip -qry "$ROOT/Inferno.ipa" Payload -x '*.DS_Store'
 
 echo
 echo "Готово: $ROOT/Inferno.ipa"

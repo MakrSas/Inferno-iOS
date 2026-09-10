@@ -7,8 +7,21 @@ QEMU fork that emulates Apple's T8030 (A13) platform well enough to boot iOS 14.
 built as a library and loaded into the app, so there is no helper process, no server, and nothing
 to connect to: the machine runs inside the app that draws it.
 
-> Inferno itself is by [@HeWhomCodes](https://github.com/ChefKissInc). This repository is the iOS
-> app around it, plus the changes to the emulator that iOS made necessary.
+> Inferno itself is by [Visual Ehrmanntraut](https://github.com/VisualEhrmanntraut) and the Inferno
+> team at [ChefKiss](https://github.com/ChefKissInc). This repository is the iOS app around it, plus
+> the changes to the emulator that iOS made necessary. **It is unofficial**, and not affiliated with
+> or endorsed by ChefKiss.
+
+<p align="center">
+  <img src="docs/screenshots/home.jpg" height="420" alt="The iOS 14 home screen, with Cydia, inside the app">
+  &nbsp;
+  <img src="docs/screenshots/shell.jpg" height="420" alt="neofetch in the app's terminal">
+  &nbsp;
+  <img src="docs/screenshots/files.png" height="420" alt="A file sent from the host phone, in the guest's Files app">
+</p>
+
+**Found a bug, or have an idea?** [Open an issue](https://github.com/MakrSas/Inferno-iOS/issues/new/choose),
+in English or Russian. Anything goes — see [Issues and ideas](#issues-and-ideas).
 
 ---
 
@@ -61,7 +74,9 @@ does not allow on its own. [StikDebug](https://github.com/StephenDev0/StikDebug)
 
 1. **Build the guest image** by ChefKiss's guide, and apply the jailbreak patches.
 
-2. **Install `Inferno.ipa` and StikDebug** with any sideloading tool — iLoader, AltStore, Sideloadly.
+2. **Get `Inferno.ipa`** from [Releases](https://github.com/MakrSas/Inferno-iOS/releases), or build
+   it yourself (see [Building](#building)). **Install it and StikDebug** with any sideloading tool —
+   iLoader, AltStore, Sideloadly.
 
    StikDebug also needs **LocalDevVPN**, which is on the App Store. It is not a VPN in the usual
    sense — it is what lets the debugger reach the device over its own loopback.
@@ -129,12 +144,16 @@ diagnostics.
 
 ## Building
 
-The emulator lives in its own repository — a fork of Inferno carrying the changes iOS needed: the
-USB-NCM host, the built-in display, the coalesced UART, the address-space memory patch. Clone it
-beside this one:
+You need a Mac with Xcode — this is built with Xcode 27.0 (27A5237l) and the iOS 27 SDK; older
+versions have not been tried — and the emulator's dependencies built for arm64 iOS into one prefix:
+glib, pixman, libslirp, libucontext, lzfse, libpng, gmp, nettle and libtasn1.
+
+The emulator lives in its own repository — [a fork of Inferno](https://github.com/MakrSas/Inferno/tree/ios)
+carrying the changes iOS needed: the USB-NCM host, the built-in display, the coalesced UART, the
+address-space memory patch. Clone it beside this one:
 
 ```bash
-git clone <your-fork-of-ChefKissInc/Inferno> inferno-src
+git clone -b ios https://github.com/MakrSas/Inferno.git inferno-src
 ```
 
 Meson cross-files hold absolute paths — the SDK, the toolchain, wherever the dependencies were
@@ -171,14 +190,31 @@ cd app && ./build.sh
 ```
 
 `build.sh` compiles the SwiftUI front end with `swiftc`, bundles the emulator library, renders the
-app icon with `actool`, ad-hoc signs everything and produces `Inferno.ipa`. It needs Xcode's command
-line tools and nothing else — there is no Xcode project.
+app icon with `actool`, ad-hoc signs everything and produces `Inferno.ipa`. Besides Xcode's command
+line tools it needs QEMU's keymaps — `brew install qemu` provides them, or point `INFERNO_KEYMAPS`
+at a copy. There is no Xcode project.
 
 ---
 
+## Issues and ideas
+
+**[Open an issue](https://github.com/MakrSas/Inferno-iOS/issues/new/choose) for anything at all:**
+
+- **Something broke** — a crash, a hang, a black screen, a guest that will not boot or will not get
+  an address.
+- **Something could be better** — anything awkward, slow, confusing, or missing from the menu.
+- **Something new** — a feature you would like to see, even a half-formed one.
+
+Write in English or Russian, whichever is easier. For a bug it helps to know the iPhone and its iOS
+version, the app's build (at the bottom of Settings), what you did and what happened. The app keeps
+`emulator.log` and `guest-console.log` in its folder in Files; attach them if you can.
+
+Pull requests are welcome too.
+
 ## Helping out
 
-Most of what was learned here is written down, because most of it was expensive to learn.
+Most of what was learned here is written down, because most of it was expensive to learn. The notes
+are in Russian, the language the work was done in.
 
 - **[`TODO.md`](TODO.md)** — everything still open, with the reasoning behind each item and what was
   already ruled out. The best place to start.
@@ -217,9 +253,16 @@ out of a disk image and put it back. `guestfs.py` moves files over the console a
 
 ## Credits and licence
 
-[Inferno](https://github.com/ChefKissInc/Inferno) is by ChefKiss. QEMU is the work of very many
-people. This app stands entirely on both.
+[Inferno](https://github.com/ChefKissInc/Inferno) is by Visual Ehrmanntraut and the Inferno team at
+ChefKiss. QEMU is the work of very many people. This app stands entirely on both — if it is useful
+to you, consider [supporting ChefKiss](https://ko-fi.com/chefkiss).
 
-The emulator is QEMU-derived and therefore **GPL-2.0**; this repository is under the same terms.
+This project is unofficial and is not affiliated with or endorsed by ChefKiss.
+
+The app is under **GPL-3.0**; see [`LICENSE`](LICENSE). The emulator keeps Inferno's terms: GPL-3.0
+as a whole, with ChefKiss's own code under AGPL-3.0, and the fork's changes under the same.
+
+Inferno's boot splash artwork belongs to ChefKiss and is not covered by those licences, so builds
+from here leave it out, and the screen stays dark until the guest draws.
 
 No Apple firmware, image or key is distributed here, and none ever will be.
