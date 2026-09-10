@@ -76,7 +76,7 @@ fetch() { # fetch <out.tar> <url> [url...]
     local url
     for url in "$@"; do
         echo "    fetch $url"
-        if curl -fL --connect-timeout 20 --retry 5 --retry-all-errors \
+        if curl -fL --connect-timeout 20 --retry 3 \
                 --speed-limit 1024 --speed-time 30 -o "$out" "$url"; then
             return 0
         fi
@@ -116,38 +116,38 @@ echo "==> SDK:    $SDK"
 # ── zlib ──────────────────────────────────────────────────────────────────
 fetch zlib.tar.gz \
     "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz" \
-    "https://zlib.net/zlib-1.3.1.tar.gz"
+    "https://zlib.net/fossils/zlib-1.3.1.tar.gz"
 untar zlib.tar.gz zlib
 ( cd zlib && ./configure --prefix="$PREFIX" --static && make -j"$JOBS" && make install )
 
 # ── GMP ───────────────────────────────────────────────────────────────────
 fetch gmp.tar.xz \
-    "https://ftpmirror.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" \
+    "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" \
     "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz" \
-    "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+    "https://ftpmirror.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
 untar gmp.tar.xz gmp
 conf_build gmp --disable-assembly
 
 # ── nettle (+ hogweed, needs GMP) ────────────────────────────────────────
 fetch nettle.tar.gz \
-    "https://ftpmirror.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz" \
+    "https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz" \
     "https://mirrors.kernel.org/gnu/nettle/nettle-3.10.2.tar.gz" \
-    "https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz"
+    "https://ftpmirror.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz"
 untar nettle.tar.gz nettle
 conf_build nettle --disable-documentation --disable-openssl --disable-assembler
 
 # ── libtasn1 ──────────────────────────────────────────────────────────────
 fetch libtasn1.tar.gz \
-    "https://ftpmirror.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz" \
+    "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz" \
     "https://mirrors.kernel.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz" \
-    "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz"
+    "https://ftpmirror.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz"
 untar libtasn1.tar.gz libtasn1
 conf_build libtasn1 --disable-doc
 
 # ── libpng ────────────────────────────────────────────────────────────────
 fetch libpng.tar.gz \
-    "https://github.com/pnggroup/libpng/releases/download/v1.6.44/libpng-1.6.44.tar.gz" \
-    "https://downloads.sourceforge.net/libpng/libpng-1.6.44.tar.gz"
+    "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.44/libpng-1.6.44.tar.gz" \
+    "https://download.sourceforge.net/libpng/libpng-1.6.44.tar.gz"
 untar libpng.tar.gz libpng
 conf_build libpng --disable-tools
 
@@ -174,7 +174,7 @@ meson_build libslirp
 
 # ── libucontext (QEMU's coroutine backend: iOS has no usable sigaltstack) ─
 fetch libucontext.tar.gz \
-    "https://github.com/kaniini/libucontext/archive/refs/tags/v1.3.2.tar.gz"
+    "https://github.com/kaniini/libucontext/archive/refs/tags/libucontext-1.3.2.tar.gz"
 untar libucontext.tar.gz libucontext
 meson_build libucontext -Dexport_unprefixed=true
 
