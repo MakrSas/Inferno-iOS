@@ -1,0 +1,105 @@
+name: Build Inferno.ipa
+
+# Builds an unsigned Inferno.ipa on a GitHub runner, so nobody needs their own
+# Mac. The artifact is attached to every run; for a vX.Y tag it is also added
+# to the release.
+#
+# No guest image, firmware or Apple key is involved here — those are still
+# yours to build by ChefKiss's guide (see README).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      emulator_ref:
+        description: "Branch/tag of the emulator fork (MakrSas/Inferno)"
+        default: "ios"
+
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # only the release step needs this
+
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      EMULATOR_REF: ${{ github.event.inputs.emulator_ref || 'ios' }}
+      PREFIX: ${{ github.workspace }}/prefix
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build tools
+        run: |
+          brew install --quiet meson ninja pkg-config autoconf automake libtool m4 qemu
+          echo "$(brew --prefix m4)/bin" >> "$GITHUB_PATH"
+
+      - name: Environment fingerprint (cache key)
+        id: env
+        run: |
+          echo "xcode=$(xcodebuild -version | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          echo "deps=${{ hashFiles('scripts/build-ios-deps.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dependencies (prefix)
+        id: cache-prefix
+        uses: actions/cache@v4
+        with:
+          path: prefix
+          key: iosdeps-${{ runner.os }}-${{ steps.env.outputs.xcode }}-${{ steps.env.outputs.deps }}
+
+      - name: Build iOS dependencies
+        if: steps.cache-prefix.outputs.cache-hit != 'true'
+        run: PREFIX="$PREFIX" JOBS=3 scripts/build-ios-deps.sh
+
+      - name: Clone the emulator fork
+        run: |
+          git clone --depth 1 -b "$EMULATOR_REF" \
+            https://github.com/MakrSas/Inferno.git inferno-src
+
+      - name: Meson cross-file
+        run: PREFIX="$PREFIX" ./make-cross-file.sh
+
+      - name: Build libqemu-aarch64-softmmu.dylib
+        run: |
+          meson setup build/inferno inferno-src \
+            --cross-file=cross-ios-arm64.txt \
+            -Dbuildtype=release -Dprefix="$PREFIX" \
+            -Dshared_lib=true -Db_staticpic=true -Dwerror=false \
+            -Dkvm=disabled -Dhvf=disabled -Dwhpx=disabled \
+            -Dcocoa=disabled -Dgtk=disabled -Dsdl=disabled -Dcurses=disabled \
+            -Dcoreaudio=disabled -Dcurl=disabled -Dlibssh=disabled -Dbzip2=disabled \
+            -Dvnc=enabled -Dvnc_jpeg=disabled -Dvnc_sasl=disabled \
+            -Dtools=disabled -Dcoroutine_backend=ucontext
+          ninja -C build/inferno libqemu-aarch64-softmmu.dylib
+
+      - name: Build Inferno.ipa
+        working-directory: app
+        env:
+          INFERNO_NO_ICON: "1"    # actool .icon needs Xcode 26+
+          INFERNO_KEYMAPS: /opt/homebrew/share/qemu/keymaps
+        run: ./build.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inferno-ipa
+          path: app/Inferno.ipa
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/Inferno.ipa
+          fail_on_unmatched_files: true
