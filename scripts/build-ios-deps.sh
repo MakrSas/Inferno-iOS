@@ -163,8 +163,11 @@ fetch glib.tar.xz \
     "https://download.gnome.org/sources/glib/2.84/glib-2.84.3.tar.xz" \
     "https://ftp.acc.umu.se/pub/gnome/sources/glib/2.84/glib-2.84.3.tar.xz"
 untar glib.tar.xz glib
+# pcre2's own JIT (sljit) uses macOS-only W^X APIs and does not compile for iOS
+# (SLJIT_UPDATE_WX_FLAGS undeclared) — turn it off in the bundled subproject.
 meson_build glib -Dtests=false -Ddtrace=disabled -Dintrospection=disabled \
-    -Dnls=enabled -Dlibmount=disabled -Dselinux=disabled
+    -Dnls=enabled -Dlibmount=disabled -Dselinux=disabled \
+    -Dpcre2:jit=disabled
 
 # ── libslirp (needs glib) ────────────────────────────────────────────────
 fetch libslirp.tar.gz \
