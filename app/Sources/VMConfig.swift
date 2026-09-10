@@ -172,6 +172,22 @@ struct VMConfig {
             argv += ["-device", "nvme-ns,drive=\(ns.file),bus=nvme-bus.0,nsid=\(ns.nsid),nstype=\(ns.nstype),logical_block_size=4096,physical_block_size=4096"]
         }
 
+        // A scratch namespace that both sides can reach: the app writes bytes
+        // into the file, the guest reads them straight off the block device, and
+        // nothing travels through the console or the network on the way. It is
+        // attached only when the file exists, because the guest only learns of a
+        // namespace if the emulator describes it in the device tree — an
+        // emulator without that patch would simply ignore this one.
+        //
+        // cache=none is not a tuning knob here. Without it the emulator answers
+        // out of the host's page cache and the guest reads what the file used to
+        // hold, which looks exactly like a corrupt transfer.
+        let transfer = VMConfig.dataDirectory.appendingPathComponent("xfer")
+        if FileManager.default.fileExists(atPath: transfer.path) {
+            argv += ["-drive", "file=\(transfer.path),format=raw,if=none,id=xfer,cache=none"]
+            argv += ["-device", "nvme-ns,drive=xfer,bus=nvme-bus.0,nsid=8,nstype=2,logical_block_size=4096,physical_block_size=4096"]
+        }
+
         if network {
             // The device listens on the same socket the machine's USB port
             // dials into, so it must be named identically.
