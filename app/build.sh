@@ -62,24 +62,26 @@ cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 # shipped in derivative builds (ui/icons/CKBrandingNotice.md in the emulator
 # tree); the fork starts without it.
 
-# App icon. Icon Composer's .icon bundle is what actool takes now: it renders
-# the layers into Assets.car for iOS 26's glass treatment and drops flat PNGs
-# beside it for everything older. The Info.plist keys it needs come back in a
-# partial plist, which is merged rather than transcribed — that way a change in
-# the icon does not need a change here.
-ICON="$ROOT/Resources/Inferno.icon"
-# Icon Composer's .icon bundle needs Xcode 26+. Where that is not available
-# (older CI images), INFERNO_NO_ICON=1 skips it — the app just ships without a
-# rendered icon.
-if [ -d "$ICON" ] && [ -z "${INFERNO_NO_ICON:-}" ]; then
-    echo "==> Иконка"
+# App icon. Two sources, same actool-compile-then-merge-partial-plist dance:
+# the Info.plist keys actool wants come back in a partial plist, merged
+# rather than transcribed so a change to the icon needs no change here.
+#
+#   Inferno.icon   — Icon Composer's bundle, iOS 26's Liquid Glass layers.
+#                    Only actool from Xcode 26+ can compile it.
+#   Assets.xcassets — a flat PNG catalog rendered from the same artwork
+#                    (scripts/render-icon.py), for older Xcode. Works
+#                    everywhere but does not get the glass treatment.
+#
+# Local builds get the real one; INFERNO_NO_ICON=1 skips both (app ships
+# with no icon at all).
+compile_icon() { # compile_icon <catalog-dir> <app-icon-name>
     xcrun actool --compile "$APP" \
         --platform iphoneos \
         --minimum-deployment-target 16.0 \
-        --app-icon Inferno \
+        --app-icon "$2" \
         --output-partial-info-plist "$BUILD/icon.plist" \
         --include-all-app-icons \
-        "$ICON" > /dev/null
+        "$1" > /dev/null
     python3 - "$APP/Info.plist" "$BUILD/icon.plist" <<'PY'
 import plistlib, sys
 target, partial = sys.argv[1], sys.argv[2]
@@ -89,6 +91,19 @@ extra.pop('com.apple.actool.compilation-results', None)
 info.update(extra)
 with open(target, 'wb') as f: plistlib.dump(info, f)
 PY
+}
+
+ICON="$ROOT/Resources/Inferno.icon"
+FALLBACK_ICON="$ROOT/Resources/Assets.xcassets"
+if [ -z "${INFERNO_NO_ICON:-}" ]; then
+    if [ -d "$ICON" ] && xcrun actool --version >/dev/null 2>&1 && \
+       xcrun actool --compile /tmp --app-icon Inferno "$ICON" >/tmp/actool-probe.log 2>&1; then
+        echo "==> Иконка (Icon Composer)"
+        compile_icon "$ICON" Inferno
+    elif [ -d "$FALLBACK_ICON" ]; then
+        echo "==> Иконка (плоский .xcassets — Xcode тут старше 26, .icon не берёт)"
+        compile_icon "$FALLBACK_ICON" AppIcon
+    fi
 fi
 
 echo "==> Подпись"

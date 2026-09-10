@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       EMULATOR_REF: ${{ github.event.inputs.emulator_ref || 'ios' }}
       PREFIX: ${{ github.workspace }}/prefix
@@ -86,7 +86,8 @@ jobs:
       - name: Build Inferno.ipa
         working-directory: app
         env:
-          INFERNO_NO_ICON: "1"    # actool .icon needs Xcode 26+
+          # build.sh probes actool itself and falls back to the flat
+          # Assets.xcassets icon when Inferno.icon (Xcode 26+) isn't supported.
           INFERNO_KEYMAPS: /opt/homebrew/share/qemu/keymaps
         run: ./build.sh
 

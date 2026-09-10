@@ -208,8 +208,10 @@ The nine iOS dependencies are built from source by
 script and the runner's Xcode, so only the first run pays the ~20-minute cost. The workflow still
 does not touch any guest image, firmware or Apple key — those are yours to build.
 
-The runner's Xcode has no Icon Composer, so CI builds set `INFERNO_NO_ICON=1` and ship without the
-rendered app icon; a local build on Xcode 26 keeps it.
+The runner is `macos-26`, so `actool` there compiles `Inferno.icon` (Icon Composer, Xcode 26+)
+directly — the built `.ipa` gets the real Liquid Glass icon, not a placeholder. `app/build.sh`
+still probes `actool` before using it and falls back to `app/Resources/Assets.xcassets` — a flat
+PNG rendering of the same artwork — if it ever runs on an older Xcode.
 
 ---
 

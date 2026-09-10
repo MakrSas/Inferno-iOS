@@ -39,7 +39,7 @@ pkg-config = 'pkg-config'
 
 [built-in options]
 c_args        = [$FLAGS, '-I$PREFIX/include']
-c_link_args   = [$FLAGS, '-L$PREFIX/lib', '-framework', 'CoreFoundation']
+c_link_args   = [$FLAGS, '-L$PREFIX/lib', '-framework', 'CoreFoundation', '-lucontext']
 cpp_args      = [$FLAGS]
 cpp_link_args = [$FLAGS]
 objc_args     = [$FLAGS]

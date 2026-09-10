@@ -647,6 +647,13 @@ struct ControlMenu: View {
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 48, height: 48)
+        // glassEffect itself is only declared in the iOS 26 SDK — #available
+        // guards it at runtime, but a toolchain built against an older SDK
+        // (Xcode below 26, as CI's still is) can't even see the symbol to
+        // compile this file. Gate it on the compiler too, so the same source
+        // builds on both: real glass with Xcode 26, the material fallback
+        // everywhere else.
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             // Clipped as well as shaped. While the menu opens, the glass is
             // handed to the presentation animation, and for a frame or two it
@@ -661,6 +668,13 @@ struct ControlMenu: View {
                 .contentShape(Circle())
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
         }
+        #else
+        face.background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            .clipShape(Circle())
+            .contentShape(Circle())
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+        #endif
     }
 
     private var startTitle: String {
