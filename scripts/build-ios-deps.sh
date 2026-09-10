@@ -179,12 +179,13 @@ meson_build libslirp
 fetch libucontext.tar.gz \
     "https://github.com/kaniini/libucontext/archive/refs/tags/libucontext-1.3.2.tar.gz"
 untar libucontext.tar.gz libucontext
-# export_unprefixed (on by default) emits `.weak name; name = alias` in the
-# arch .S files — GNU-as syntax Apple's integrated assembler rejects. Not
-# needed: the prefix on the real Mac only ever had the plain
-# libucontext_*-prefixed symbols; QEMU's own coroutine-ucontext.c calls those
-# directly. Must be turned off explicitly — the upstream default is true.
-meson_build libucontext -Dexport_unprefixed=false
+# Non-freestanding pulls in the SDK's <ucontext.h>, which iOS guards behind
+# _XOPEN_SOURCE ("deprecated ucontext routines"). freestanding=true uses
+# libucontext's own self-contained aarch64 struct instead (arch/aarch64's own
+# bits.h) and, as a side effect, turns export_unprefixed and build_posix off —
+# which matches the real Mac's prefix: just libucontext.a, prefixed symbols,
+# no posix compat library.
+meson_build libucontext -Dfreestanding=true
 
 # ── lzfse ────────────────────────────────────────────────────────────────
 fetch lzfse.tar.gz \
