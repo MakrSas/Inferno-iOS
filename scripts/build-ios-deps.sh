@@ -179,7 +179,11 @@ meson_build libslirp
 fetch libucontext.tar.gz \
     "https://github.com/kaniini/libucontext/archive/refs/tags/libucontext-1.3.2.tar.gz"
 untar libucontext.tar.gz libucontext
-meson_build libucontext -Dexport_unprefixed=true
+# export_unprefixed emits `.weak name; name = alias` in the arch .S files —
+# GNU-as syntax Apple's integrated assembler doesn't understand. Not needed:
+# the prefix on the real Mac only ever had the plain libucontext_*-prefixed
+# symbols; QEMU's own coroutine-ucontext.c calls those directly.
+meson_build libucontext
 
 # ── lzfse ────────────────────────────────────────────────────────────────
 fetch lzfse.tar.gz \
