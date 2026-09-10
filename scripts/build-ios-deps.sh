@@ -1,17 +1,17 @@
 #!/bin/bash
-# Собирает зависимости эмулятора под arm64 iOS в один prefix — то же, что было
-# сделано руками для README-iOS.md «Зависимости, собранные под iOS», только
-# воспроизводимо и без участия человека. Используется CI (.github/workflows),
-# но запускается и локально:
+# Builds the emulator's dependencies for arm64 iOS into a single prefix — the
+# same set as README-iOS.md's "Dependencies built for iOS", but reproducibly
+# and with no human in the loop. Used by CI (.github/workflows), but also runs
+# locally:
 #
 #   PREFIX=$PWD/prefix scripts/build-ios-deps.sh
 #
-# Требуется macOS с Xcode (iPhoneOS SDK) и: meson, ninja, pkg-config, autoconf,
+# Needs macOS with Xcode (iPhoneOS SDK) and: meson, ninja, pkg-config, autoconf,
 # automake, libtool, m4  (brew install meson ninja pkg-config autoconf automake libtool m4).
 #
-# Версии закреплены под то, что лежит в рабочем prefix у автора:
+# Versions are pinned to what sits in the author's working prefix:
 #   zlib 1.3.1, GMP 6.3.0, nettle 3.10.2 (+hogweed), libtasn1 4.20.0,
-#   libpng 1.6.44, pixman 0.44.2, glib 2.84.3 (со своими libffi/pcre2/libintl),
+#   libpng 1.6.44, pixman 0.44.2, glib 2.84.3 (with its own libffi/pcre2/libintl),
 #   libslirp 4.9.1, libucontext, lzfse.
 set -euo pipefail
 
@@ -22,7 +22,6 @@ DEPLOY="${DEPLOY:-16.0}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"
 
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-BIN="$(dirname "$(xcrun --sdk iphoneos --find clang)")"
 FLAGS="-arch arm64 -isysroot $SDK -mios-version-min=$DEPLOY"
 
 export CC="clang $FLAGS"
@@ -75,7 +74,7 @@ fetch() { # fetch <url> <out.tar>
     local url="$1" out="$2"
     [ -f "$out" ] || curl -fL --retry 3 -o "$out" "$url"
 }
-untar() { # untar <tar> <expected-dir>
+untar() { # untar <tar> <dest-dir>
     local t="$1" d="$2"
     rm -rf "$d"
     mkdir -p "$d"
@@ -112,7 +111,7 @@ fetch "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" gmp.tar.xz
 untar gmp.tar.xz gmp
 conf_build gmp --disable-assembly
 
-# ── nettle (+ hogweed, нужен GMP) ─────────────────────────────────────────
+# ── nettle (+ hogweed, needs GMP) ────────────────────────────────────────
 fetch "https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz" nettle.tar.gz
 untar nettle.tar.gz nettle
 conf_build nettle --disable-documentation --disable-openssl --disable-assembler
@@ -132,18 +131,18 @@ fetch "https://www.cairographics.org/releases/pixman-0.44.2.tar.gz" pixman.tar.g
 untar pixman.tar.gz pixman
 meson_build pixman -Dtests=disabled -Ddemos=disabled -Dgtk=disabled
 
-# ── glib (со своими libffi, pcre2, proxy-libintl — их нет в iOS SDK) ──────
+# ── glib (with its own libffi, pcre2, proxy-libintl — absent from the iOS SDK) ─
 fetch "https://download.gnome.org/sources/glib/2.84/glib-2.84.3.tar.xz" glib.tar.xz
 untar glib.tar.xz glib
 meson_build glib -Dtests=false -Ddtrace=disabled -Dintrospection=disabled \
     -Dnls=enabled -Dlibmount=disabled -Dselinux=disabled
 
-# ── libslirp (нужен glib) ────────────────────────────────────────────────
+# ── libslirp (needs glib) ────────────────────────────────────────────────
 fetch "https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.9.1/libslirp-v4.9.1.tar.gz" libslirp.tar.gz
 untar libslirp.tar.gz libslirp
 meson_build libslirp
 
-# ── libucontext (coroutine-бэкенд для QEMU: у iOS нет годного sigaltstack) ─
+# ── libucontext (QEMU's coroutine backend: iOS has no usable sigaltstack) ─
 fetch "https://github.com/kaniini/libucontext/archive/refs/tags/v1.3.2.tar.gz" libucontext.tar.gz
 untar libucontext.tar.gz libucontext
 meson_build libucontext -Dexport_unprefixed=true
@@ -155,5 +154,5 @@ make -C lzfse -j"$JOBS" CC="$CC" INSTALL_PREFIX="$PREFIX"
 make -C lzfse install INSTALL_PREFIX="$PREFIX"
 
 echo
-echo "==> Готово. Содержимое $PREFIX/lib:"
+echo "==> Done. Contents of $PREFIX/lib:"
 ls "$PREFIX/lib" | sed 's/^/    /'
