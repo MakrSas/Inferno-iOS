@@ -19,7 +19,7 @@ labels: bug
 
 - iPhone and iOS version:
 - App build (at the bottom of Settings):
-- How JIT is enabled (StikDebug version):
+- How JIT is enabled (StikDebug version, and is legacy.js assigned?):
 - Guest image (iOS version, jailbreak bootstrap applied?):
 
 **Logs**

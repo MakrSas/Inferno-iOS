@@ -84,8 +84,9 @@ does not allow on its own. [StikDebug](https://github.com/StephenDev0/StikDebug)
 3. **Set StikDebug up**: turn LocalDevVPN on, and put your pairing file into StikDebug (iLoader can
    hand it over).
 
-4. **Launch Inferno through StikDebug**, so it starts with JIT. Then check that the app's folder has
-   appeared in Files → On My iPhone → Inferno.
+4. **Assign the script, then launch Inferno through StikDebug**, so it starts with JIT. Before
+   launching, long-press Inferno in StikDebug, choose **Assign Script** and pick **`legacy.js`**.
+   Then launch it, and check that the app's folder has appeared in Files → On My iPhone → Inferno.
 
 5. **Copy the guest images in.** Put `AppleSEPROM-Cebu-B1` and the `InfernoData` folder into that
    folder. The empty directories are already there; the files go straight into them:
