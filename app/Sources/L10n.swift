@@ -1,0 +1,296 @@
+import Foundation
+import SwiftUI
+
+/// Interface language.
+///
+/// The strings are written in Russian in the source and translated on the way
+/// out. That keeps the diff small and lets an untranslated string fall back to
+/// the original rather than showing a key.
+enum AppLanguage: String, CaseIterable {
+    case system, ru, en
+
+    var title: String {
+        switch self {
+        case .system: return "Auto"
+        case .ru:     return "Русский"
+        case .en:     return "English"
+        }
+    }
+}
+
+enum L10n {
+    static var language: AppLanguage {
+        AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .system
+    }
+
+    static var showEnglish: Bool {
+        switch language {
+        case .ru:     return false
+        case .en:     return true
+        case .system: return !(Locale.preferredLanguages.first ?? "en").hasPrefix("ru")
+        }
+    }
+
+    static let table: [String: String] = [
+        // Missing until the audit found them
+        "файла нет": "no such file",
+        "соединение закрыто": "the connection was closed",
+        "сервер отклонил рукопожатие": "the server refused the handshake",
+        "сервер требует пароль VNC": "the server wants a VNC password",
+        "процессор простаивает — гость не исполняется":
+            "the processor is idle — the guest is not running",
+        "загружено ~%.1f ядра — гость исполняется":
+            "about %.1f cores busy — the guest is running",
+        "0x%llx — вне загруженных образов (код, сгенерированный транслятором)":
+            "0x%llx — outside every loaded image (code the translator generated)",
+        "КУДА КЛАСТЬ ФАЙЛЫ.txt": "WHERE TO PUT FILES.txt",
+        "Папки уже созданы, файлы можно класть прямо в них. Подробности — в файле «КУДА КЛАСТЬ ФАЙЛЫ.txt» там же.":
+            "The folders are already there; the files go straight into them. The details are in “WHERE TO PUT FILES.txt” beside them.",
+        "Для Secure Enclave нужны 4 ядра И multi одновременно. При 2 ядрах или при single он паникует на инициализации хранилища ключей — проверено на обоих устройствах.":
+            "The Secure Enclave needs 4 cores AND multi together. With 2 cores, or with single, it panics initialising the key store — seen on both devices.",
+
+        // Interpolated, so held as format strings
+        "Параметры: %d vCPU, %@, tcg %@": "Settings: %d vCPU, %@, tcg %@",
+        "JIT: есть (%@)": "JIT: yes (%@)",
+        "JIT: нет — %@": "JIT: no — %@",
+        "Работает · %d×%d": "Running · %d×%d",
+        "Остановлена (код %d)": "Stopped (code %d)",
+        "Ошибка: %@": "Error: %@",
+        "JIT недоступен — %@.\nБез него транслятор не сможет выделить буфер, и машина не запустится.":
+            "No JIT — %@.\nWithout it the translator cannot get its buffer and the machine will not start.",
+        "Экран %d×%d подключён, ждём первый кадр": "Screen %d×%d attached, waiting for the first frame",
+        "Экран недоступен: %@": "No screen: %@",
+        "%.0f КБ": "%.0f KB",
+        "%.1f МБ": "%.1f MB",
+        "%@ за %.1f с · %.0f КБ/с": "%@ in %.1f s · %.0f KB/s",
+        "%@ из %@": "%@ of %@",
+        "%d МБ": "%d MB",
+        "Нет такого файла в госте: %@": "No such file in the guest: %@",
+        "Файл не сошёлся по контрольной сумме (%@).": "The file did not match its checksum (%@).",
+        "Ошибка ввода-вывода: %@": "Input/output error: %@",
+
+        "Гость не подключился к приложению: команда не дошла или сеть не работает.": "The guest never connected to the app: the command did not arrive or the network is down.",
+        "Шелл гостя не отвечает. Передача файлов работает только с бутстрапом, где на консоли сидит bash.": "The guest's shell is not answering. File transfer needs the bootstrap with bash on the console.",
+        "Сеть в госте не поднялась. Нажмите «Поднять сеть в госте» и попробуйте снова.": "The guest's network did not come up. Tap “Bring the network up in the guest” and try again.",
+        "Включите «Интернет через USB» в параметрах: файлы идут по той же сети.": "Turn on “Internet over USB” in the settings: files travel over the same network.",
+        "Файл появится в папке Guest приложения — её видно в «Файлах».": "The file will appear in the app's Guest folder, visible in the Files app.",
+        "Забрать": "Fetch",
+        "Путь в госте": "Path in the guest",
+        "Забрать файл из гостя": "Fetch a file from the guest",
+        "Забрать файл из гостя…": "Fetch a file from the guest…",
+        "Отправить файл в гостя…": "Send a file to the guest…",
+        "Файлы": "Files",
+        // Screen and network, added with the built-in display
+        "Встроенный вывод": "Built-in output",
+        "Приложение читает кадры прямо из памяти эмулятора и берёт только перерисованные строки. Ни сокета, ни кодирования.":
+            "The app reads frames straight out of the emulator's memory and takes only the rows that were redrawn. No socket, no encoding.",
+        "Картинка идёт через VNC-сервер эмулятора по локальной петле кодировкой Raw: весь кадр сравнивается, кодируется, пересылается и разбирается заново. Медленнее, зато этот путь давно обкатан.":
+            "The picture goes through the emulator's VNC server over the loopback in the Raw encoding: the whole frame is compared, encoded, sent and taken apart again. Slower, but this path has years of use behind it.",
+        "Картинка не готовится вовсе: ничего не копируется и не кодируется. Остаётся только консоль гостя.":
+            "No picture is prepared at all: nothing is copied or encoded. Only the guest's console is left.",
+        "Сглаживать при растягивании": "Smooth when stretching",
+        "Экран гостя всегда растягивается на весь экран телефона. Без сглаживания видны квадратные пиксели, со сглаживанием картинка мягче. На скорость гостя не влияет ни то, ни другое.":
+            "The guest's screen is always stretched to fill the phone's. Without smoothing the pixels show as squares; with it the picture is softer. Neither changes how fast the guest runs.",
+        "Поднимать интерфейс в госте": "Bring the interface up in the guest",
+        "iOS не всегда включает свой конец связи: интерфейс появляется и тут же гасится. Если через минуту адрес так и не получен, приложение само выполнит в консоли гостя «ipconfig set en0 DHCP». Нужен бутстрап с шеллом на консоли.":
+            "iOS does not always switch its own end of the link on: the interface appears and is put straight back down. If there is still no address after a minute, the app runs `ipconfig set en0 DHCP` in the guest's console itself. Needs the bootstrap with a shell on the console.",
+        "Поднять сеть в госте": "Bring the network up in the guest",
+        "Сеть: прошу гостя поднять en0…": "Network: asking the guest to bring en0 up…",
+        "Сеть: гость получил адрес.": "Network: the guest has an address.",
+        " · сеть есть": " · network up",
+        "в этой сборке библиотеки нет встроенного вывода":
+            "this build of the library has no built-in output",
+        // The redesign: one menu, one settings screen
+        "Вид": "View",
+        "Сеть: консоль занята, попрошу позже.": "Network: the console is busy, will ask later.",
+        "Счётчик кадров": "Frame counter",
+        "Под экраном гостя, для интереса: сколько кадров он успел нарисовать за секунду. Считаются те, что дошли до приложения.":
+            "Under the guest's screen, for the fun of it: how many frames it managed in the last second. Counted as they reach the app.",
+        "Сеть: гость погасил связь.": "Network: the guest took the link down.",
+        "Кнопки: экран не подключён, нажатие некуда отправить.":
+            "Buttons: no screen attached, nowhere to send the press.",
+        "Кнопка %@ (F%d) на %.1f с": "Button %@ (F%d) for %.1f s",
+        "Диагностика": "Diagnostics",
+        "Ответы появятся в терминале, на вкладке «Эмулятор».":
+            "The answers appear in the terminal, on the Emulator tab.",
+        "Источник": "Source",
+        "Сборка": "Build",
+        "Скруглять углы": "Round the corners",
+        "Как у настоящего iPhone 11: 41,5 pt при ширине экрана 414 pt — десятая часть ширины. Доля, а не число в пикселях, поэтому углы остаются верными при любом масштабе. Выключите, чтобы видеть кадр целиком, до последней точки.":
+            "Exactly an iPhone 11's: 41.5 pt on a screen 414 pt wide — a tenth of the width. Kept as that fraction rather than as pixels, so the corners stay right at any size. Turn it off to see the whole frame, down to the last dot.",
+        "Без сглаживания видны квадратные пиксели, со сглаживанием картинка мягче. На скорость гостя не влияет ни то, ни другое.":
+            "Without smoothing the pixels show as squares; with it the picture is softer. Neither changes how fast the guest runs.",
+        "Прокручивать к последней строке, как только приходит новая.":
+            "Scroll to the last line as soon as a new one arrives.",
+        "Потолок процесса на iPhone — ровно 3 ГиБ, и в него входит всё остальное, что держит приложение.":
+            "The process ceiling on an iPhone is exactly 3 GiB, and everything else the app holds counts towards it.",
+
+        // Panes and controls
+        "Экран": "Screen",
+        "Терминал": "Terminal",
+        "Эмулятор": "Emulator",
+        "Консоль гостя": "Guest console",
+        "Шелл": "Shell",
+        "Лог ядра": "Kernel log",
+        "Подключить": "Connect",
+        "Попробовать снова": "Try again",
+        "Прошу гостя подключиться…": "Asking the guest to connect…",
+        "Отдельный канал: гость сам звонит приложению по сети, и сюда не попадает ничего, кроме написанного шеллом. Нужны включённая сеть и bash на консоли.":
+            "A channel of its own: the guest calls the app over the network, so nothing reaches this pane but what the shell wrote. Needs the network on and bash on the console.",
+        "Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа.":
+            "The guest's shell is not answering: the bootstrap's bash has to be on the console.",
+        "Гость не подключился. Проверьте, что сеть в госте поднялась.":
+            "The guest did not call back. Check that its network came up.",
+        "Гость закрыл канал.": "The guest closed the channel.",
+        "Через консоль": "Over the console",
+        "Гость не позвонил обратно.": "The guest never called back.",
+        "Перехожу на консоль.": "Falling back to the console.",
+        "Сети у гостя нет — шелл идёт по консоли.":
+            "The guest has no network — the shell goes over the console.",
+        "Шелл не отозвался на проверку. Похоже, на консоли не bash.":
+            "The shell did not answer the probe. There is probably no bash on the console.",
+        "Канал по консоли открыт: показывается только вывод команд.":
+            "Console channel open: only what commands print is shown.",
+        "Сети в госте нет: bash ответил «Network is unreachable».":
+            "The guest has no network: bash answered “Network is unreachable”.",
+        "В этом bash нет поддержки /dev/tcp.": "This bash was built without /dev/tcp.",
+        "Сеть в госте не поднялась, а без неё позвонить он не может.":
+            "The guest's network never came up, and without it there is no call to make.",
+        "Сеть в госте не работает: bash ответил «Network is unreachable».":
+            "The guest has no working network: bash answered “Network is unreachable”.",
+        "Гость дозвонился, но соединение отвергнуто.":
+            "The guest got through, but the connection was refused.",
+        "В этом bash нет поддержки /dev/tcp, а без неё канал не открыть.":
+            "This bash was built without /dev/tcp, and the channel needs it.",
+        "Машина": "Machine",
+        "Параметры": "Settings",
+        "Параметры…": "Settings…",
+        "Запустить": "Start",
+        "Запущена": "Running",
+        "Остановлена — перезапустите приложение": "Stopped — relaunch the app",
+        "Во весь экран": "Full screen",
+        "Выключить машину…": "Shut the machine down…",
+        "Выключить машину?": "Shut the machine down?",
+        "Выключить": "Shut down",
+        "Отмена": "Cancel",
+        "Готово": "Done",
+        "Ввод": "Send",
+        "Команда гостю": "Command for the guest",
+        "Следить за концом": "Follow the tail",
+        "Без лога ядра": "Hide kernel log",
+        "Только шелл": "Shell only",
+        "У гостя одна консоль на всех: ядро сыплет в неё сообщения драйверов, bash пишет туда же. Сообщения ядра узнаются по виду и вырезаются — в том числе воткнутые в середину чужой строки. Это распознавание по признакам, а не настоящее разделение: что-то незнакомое может проскочить.":
+            "The guest has one console for everything: the kernel pours driver messages into it and bash writes to it too. Kernel messages are recognised by their shape and cut out, including ones landing in the middle of somebody else's line. This is recognition by pattern, not a real separation: something unfamiliar can still get through.",
+        "Кнопки устройства": "Device buttons",
+        "Питание": "Power",
+        "Громче": "Volume up",
+        "Тише": "Volume down",
+        "Состояние": "Status",
+        "Сборка: ": "Build: ",
+        "Проверить JIT заново": "Re-check JIT",
+        "Диагностика памяти": "Memory diagnostics",
+        "Состояние машины (QMP)": "Machine status (QMP)",
+        "Потоки и загрузка": "Threads and load",
+        "Где крутится (PC)": "Where it spins (PC)",
+        "Проверить снова": "Check again",
+        "Не хватает": "Missing",
+
+        // Settings
+        "Ядра": "Cores",
+        "Всего vCPU": "vCPUs in total",
+        "Память": "Memory",
+        "Гостю": "To the guest",
+        "Сеть": "Network",
+        "Интернет через USB": "Internet over USB",
+        "Без экрана": "No screen",
+        "Транслятор": "Translator",
+        "Потоки TCG": "TCG threads",
+        "Буфер трансляций": "Translation buffer",
+        "Язык": "Language",
+        "Одно ядро уходит под SEP: при 4 гостю достаётся 3.":
+            "One core goes to the SEP: with 4, the guest gets 3.",
+        "При 7 инициализация машины тратит ~1.4 ГБ только на служебные структуры.":
+            "With 7, machine setup spends about 1.4 GB on bookkeeping structures alone.",
+        "Для Secure Enclave нужны 4 ядра И multi одновременно. При 2 ядрах или при single он паникует на sks.":
+            "The Secure Enclave needs 4 cores AND multi together. With 2 cores, or with single, it panics in sks.",
+        "single оставлен для диагностики. Гость на нём не грузится: SEP и ядра AP должны двигаться одновременно.":
+            "single is kept for diagnostics. The guest will not boot on it: the SEP and the AP cores have to move together.",
+        "VNC-сервер не запускается вовсе: ничего не кодируется и не копируется. Остаётся только консоль гостя.":
+            "No VNC server at all: nothing to encode, nothing to copy. Only the guest console is left.",
+        "Эмулятор сам работает USB-хостом: переводит устройство в режим CDC-NCM и выпускает трафик наружу через slirp. Отдельная виртуалка не нужна.":
+            "The emulator acts as the USB host itself: it switches the device into CDC-NCM mode and lets the traffic out through slirp. No companion VM needed.",
+        "Изменения применяются при следующем запуске машины. Перезапустите приложение, чтобы запустить её заново.":
+            "Changes apply the next time the machine starts. Relaunch the app to start it again.",
+        "QEMU допишет диски на файлы и завершится. Чтобы запустить машину заново, перезапустите приложение.":
+            "QEMU will flush the disks to their files and exit. To start the machine again, relaunch the app.",
+
+        // States and messages
+        "Не запущена": "Not running",
+        "Машина остановлена": "The machine is stopped",
+        "Машина работает, подключаемся к экрану…": "Machine running, connecting to the screen…",
+        "Машина работает, экран ещё не слушает": "Machine running, the screen is not listening yet",
+        "Работает · экран подключается": "Running · screen connecting",
+        "Откройте меню и запустите машину": "Open the menu and start the machine",
+        "Ожидание вывода консоли…": "Waiting for console output…",
+        "Пока пусто. Здесь появятся сообщения эмулятора, включая причину отказа запуска.":
+            "Empty for now. Emulator messages appear here, including why a start was refused.",
+        "подключено": "connected",
+        "нет связи": "no link",
+        "Запуск отменён: JIT недоступен.": "Start cancelled: no JIT.",
+        "Выключение: отправляю QMP quit…": "Shutdown: sending QMP quit…",
+        "Выключение: команда отправлена, машина сбрасывает диски на файлы":
+            "Shutdown: command sent, the machine is flushing its disks",
+        "Выключение: команда не ушла": "Shutdown: the command did not go out",
+        "Выключение: приветствия от QMP нет": "Shutdown: no greeting from QMP",
+        "Диск устройства (root.qcow2 или root)": "Device disk (root.qcow2 or root)",
+        "Прошивка NVMe": "NVMe firmware",
+        "Прошивка SEP": "SEP firmware",
+        "Тикет": "Ticket",
+        "Откройте «Файлы» → «На iPhone» → «Inferno» и скопируйте туда InfernoData и AppleSEPROM-Cebu-B1.":
+            "Open Files → On My iPhone → Inferno and copy InfernoData and AppleSEPROM-Cebu-B1 there.",
+
+        // JIT
+        "не проверялось": "not checked",
+        "MAP_JIT, отладчик": "MAP_JIT, debugger",
+        "зеркальное отображение (split-wx)": "mirrored mapping (split-wx)",
+        "ptrace + зеркальное отображение": "ptrace + mirrored mapping",
+        "включите JIT (StikDebug) и вернитесь в приложение":
+            "enable JIT (StikDebug) and come back to the app",
+        "самотрассировка прошла, но исполняемой памяти всё равно нет":
+            "self-tracing worked, but there is still no executable memory",
+        "RWX без MAP_JIT": "RWX without MAP_JIT",
+        "исполнение RWX": "executing RWX",
+        "исполнение RW→RX": "executing RW→RX",
+        "Проверка исполняемой памяти:\n  ": "Executable memory check:\n  ",
+
+        // VNC and probes
+        "VNC: сокет открыт, рукопожатие": "VNC: socket open, handshaking",
+        "сервер не прислал версию протокола": "the server sent no protocol version",
+        "сервер отказал в соединении": "the server refused the connection",
+        "оборвано имя сервера": "the server name was cut short",
+        "непонятное сообщение сервера": "unintelligible message from the server",
+        "нет параметров экрана": "no screen parameters",
+        "QMP: сокет открыт, но приветствия нет": "QMP: socket open, but no greeting",
+        "Пробник: не удалось определить занятый поток": "Probe: could not tell which thread is busy",
+        "  адрес меняется — поток исполняет цикл": "  the address moves — the thread is running a loop",
+        "  адрес не меняется — поток стоит на одной инструкции":
+            "  the address does not move — the thread is stuck on one instruction",
+        "Аргументы:\n  ": "Arguments:\n  ",
+    ]
+
+    static func string(_ russian: String) -> String {
+        guard showEnglish else { return russian }
+        return table[russian] ?? russian
+    }
+}
+
+/// Shorthand used at every call site.
+func L(_ russian: String) -> String { L10n.string(russian) }
+
+/// The same, for a line with something substituted into it.
+///
+/// The Russian is written as a format string and translated as one, so the
+/// substitutions land in whichever order the other language wants them.
+func L(_ russian: String, _ arguments: CVarArg...) -> String {
+    String(format: L10n.string(russian), arguments: arguments)
+}

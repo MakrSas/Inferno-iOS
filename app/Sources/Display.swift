@@ -1,0 +1,228 @@
+import CoreGraphics
+import Foundation
+
+/// Where the guest's picture comes from and where its touches go.
+///
+/// Two implementations: the emulator's VNC server over the loopback, and the
+/// emulator's framebuffer read straight out of this process. They are
+/// interchangeable so the choice can stay a switch in the settings rather than
+/// a rebuild.
+protocol GuestDisplay: AnyObject {
+    var onFrame: ((CGImage) -> Void)? { get set }
+    var onStatus: ((GuestDisplayStatus) -> Void)? { get set }
+    var status: GuestDisplayStatus { get }
+
+    func connect()
+    func disconnect()
+
+    /// Absolute position in framebuffer pixels: a tap lands where the finger
+    /// is, which is what the emulated multitouch panel expects.
+    func send(touch: CGPoint, pressed: Bool)
+    /// The machine wires the device buttons to F1..F10.
+    func send(functionKey: UInt32, pressed: Bool)
+}
+
+enum GuestDisplayStatus: Equatable {
+    case disconnected
+    case connecting
+    case connected(width: Int, height: Int)
+    case failed(String)
+
+    var size: (width: Int, height: Int)? {
+        if case .connected(let w, let h) = self { return (w, h) }
+        return nil
+    }
+}
+
+/// The guest's framebuffer, read where it already is.
+///
+/// The emulator is a library inside this process, so its display surface is
+/// simply memory this app can look at. The library keeps track of which rows
+/// the guest redrew and hands over only those; nothing is compared, encoded or
+/// sent anywhere. What is left is the copy itself, and the frame that copy is
+/// published into.
+///
+/// Frames rotate through three buffers. An image handed to SwiftUI must not be
+/// written to while it is still on screen, and rotating gives every published
+/// frame two more frames of life — long enough for the view to have moved on.
+/// The alternative, copying the whole screen for each frame, is what the VNC
+/// path already does and what this is here to avoid.
+final class EmbeddedDisplay: GuestDisplay {
+    private typealias VoidFn = @convention(c) () -> Void
+    private typealias ReadFn = @convention(c) (UnsafeMutableRawPointer?, Int, UnsafeMutablePointer<UInt32>?) -> Int32
+    private typealias TouchFn = @convention(c) (Int32, Int32, Bool) -> Void
+    private typealias KeyFn = @convention(c) (UInt32, Bool) -> Void
+
+    /// Matches InfernoFrameResult in ui/inferno-embed.h.
+    private enum Result: Int32 {
+        case none = 0
+        case ok = 1
+        case resize = 2
+    }
+
+    /// The info block is eight uint32 fields; read by index so no struct
+    /// layout has to be assumed across the language boundary.
+    private enum Field {
+        static let width = 0, height = 1, stride = 2
+        static let x = 3, y = 4, w = 5, h = 6
+        static let count = 8
+    }
+
+    private static let bufferCount = 3
+
+    private(set) var status: GuestDisplayStatus = .disconnected
+    var onFrame: ((CGImage) -> Void)?
+    var onStatus: ((GuestDisplayStatus) -> Void)?
+
+    private let read: ReadFn
+    private let touchFn: TouchFn
+    private let keyFn: KeyFn
+
+    private var thread: Thread?
+    private var running = false
+
+    private var buffers: [UnsafeMutableRawPointer] = []
+    private var bufferBytes = 0
+    private var current = 0
+    private var size = (width: 0, height: 0)
+
+    /// Available only once the emulator library is loaded and its machine is up.
+    init?(bridge: QemuBridge = .shared) {
+        guard let read = bridge.symbol("inferno_display_read"),
+              let touch = bridge.symbol("inferno_input_touch"),
+              let key = bridge.symbol("inferno_input_function_key")
+        else { return nil }
+        self.read = unsafeBitCast(read, to: ReadFn.self)
+        self.touchFn = unsafeBitCast(touch, to: TouchFn.self)
+        self.keyFn = unsafeBitCast(key, to: KeyFn.self)
+    }
+
+    deinit {
+        buffers.forEach { $0.deallocate() }
+    }
+
+    // MARK: - Session
+
+    func connect() {
+        guard thread == nil else { return }
+        report(.connecting)
+        running = true
+
+        let thread = Thread { [weak self] in self?.pump() }
+        thread.name = "inferno.display"
+        thread.stackSize = 256 * 1024
+        thread.qualityOfService = .userInteractive
+        self.thread = thread
+        thread.start()
+    }
+
+    func disconnect() {
+        running = false
+        thread = nil
+        report(.disconnected)
+    }
+
+    private func report(_ new: GuestDisplayStatus) {
+        if case .connected(let w, let h) = new {
+            LogCapture.shared.note("Экран: встроенный вывод, \(w)×\(h)")
+        }
+        DispatchQueue.main.async {
+            self.status = new
+            self.onStatus?(new)
+        }
+    }
+
+    /// Reads at the rate the emulator redraws. A pass with nothing to show
+    /// costs one lock and a comparison, so polling is cheaper than arranging to
+    /// be woken.
+    private func pump() {
+        let info = UnsafeMutablePointer<UInt32>.allocate(capacity: Field.count)
+        info.initialize(repeating: 0, count: Field.count)
+        defer { info.deallocate() }
+
+        while running {
+            let outcome = Result(rawValue: read(buffers.isEmpty ? nil : buffers[current],
+                                                bufferBytes, info)) ?? .none
+            switch outcome {
+            case .resize:
+                resize(width: Int(info[Field.width]), height: Int(info[Field.height]))
+            case .ok:
+                mirror(rect: (x: Int(info[Field.x]), y: Int(info[Field.y]),
+                              w: Int(info[Field.w]), h: Int(info[Field.h])),
+                       stride: Int(info[Field.stride]))
+                publish()
+                current = (current + 1) % EmbeddedDisplay.bufferCount
+            case .none:
+                break
+            }
+            Thread.sleep(forTimeInterval: 1.0 / 60)
+        }
+    }
+
+    private func resize(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+        buffers.forEach { $0.deallocate() }
+        bufferBytes = width * height * 4
+        buffers = (0..<EmbeddedDisplay.bufferCount).map { _ in
+            let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferBytes, alignment: 16)
+            // Black rather than whatever was in the page: the first frame after
+            // a resize may not cover the screen.
+            memset(buffer, 0, bufferBytes)
+            return buffer
+        }
+        current = 0
+        size = (width, height)
+        report(.connected(width: width, height: height))
+    }
+
+    /// Copies what was just read into the other buffers, so every one of them
+    /// stays a complete frame while only the changed rows are ever touched.
+    private func mirror(rect: (x: Int, y: Int, w: Int, h: Int), stride: Int) {
+        guard rect.w > 0, rect.h > 0, buffers.count > 1 else { return }
+        let source = buffers[current]
+        let span = rect.w * 4
+        for (index, destination) in buffers.enumerated() where index != current {
+            for row in rect.y..<(rect.y + rect.h) {
+                let offset = row * stride + rect.x * 4
+                memcpy(destination.advanced(by: offset), source.advanced(by: offset), span)
+            }
+        }
+    }
+
+    private func publish() {
+        guard size.width > 0, bufferBytes > 0, current < buffers.count else { return }
+        let buffer = buffers[current]
+        // No copy: the bytes stay ours, and rotation keeps them still for long
+        // enough that the image on screen never sees them change.
+        guard let data = CFDataCreateWithBytesNoCopy(nil, buffer.assumingMemoryBound(to: UInt8.self),
+                                                     bufferBytes, kCFAllocatorNull),
+              let provider = CGDataProvider(data: data)
+        else { return }
+
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue
+                                | CGBitmapInfo.byteOrder32Little.rawValue)
+        guard let image = CGImage(
+            width: size.width, height: size.height,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: size.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: info,
+            provider: provider,
+            decode: nil, shouldInterpolate: false,
+            intent: .defaultIntent)
+        else { return }
+
+        DispatchQueue.main.async { self.onFrame?(image) }
+    }
+
+    // MARK: - Input
+
+    func send(touch: CGPoint, pressed: Bool) {
+        guard size.width > 0 else { return }
+        touchFn(Int32(touch.x), Int32(touch.y), pressed)
+    }
+
+    func send(functionKey: UInt32, pressed: Bool) {
+        keyFn(functionKey, pressed)
+    }
+}

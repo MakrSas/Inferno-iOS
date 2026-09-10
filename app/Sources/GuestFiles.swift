@@ -1,0 +1,470 @@
+import Darwin
+import Foundation
+
+/// Moves files between the phone and the guest — the fast way, over the USB
+/// network, with the guest's console carrying nothing but the command.
+///
+/// The guest reaches this app at 10.0.2.2: slirp, which runs inside this very
+/// process, turns that address into 127.0.0.1 (libslirp `socket.c`). So the app
+/// listens on the loopback, tells the guest's shell to connect there through
+/// bash's `/dev/tcp`, and `cat` on the far end copies the bytes as they are. On
+/// the test rig five megabytes went across in ten seconds. The console alone
+/// manages a few kilobytes a second: it has no flow control, so every two
+/// kilobytes need a round trip to make sure none were lost.
+///
+/// The commands are kept short on purpose. When the guest is busy the console
+/// drops bytes even inside a single line, and a long command arrives mangled —
+/// bash is then left inside an unclosed quote and swallows whatever comes next.
+///
+/// Everything here blocks; run it off the main thread.
+final class GuestFiles {
+    enum Failure: LocalizedError {
+        case networkOff
+        case networkDown
+        case noShell
+        case notFound(String)
+        case noConnection
+        case mismatch(String)
+        case io(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .networkOff:
+                return L("Включите «Интернет через USB» в параметрах: файлы идут по той же сети.")
+            case .networkDown:
+                return L("Сеть в госте не поднялась. Нажмите «Поднять сеть в госте» и попробуйте снова.")
+            case .noShell:
+                return L("Шелл гостя не отвечает. Передача файлов работает только с бутстрапом, где на консоли сидит bash.")
+            case .notFound(let path):
+                return L("Нет такого файла в госте: %@", path)
+            case .noConnection:
+                return L("Гость не подключился к приложению: команда не дошла или сеть не работает.")
+            case .mismatch(let detail):
+                return L("Файл не сошёлся по контрольной сумме (%@).", detail)
+            case .io(let detail):
+                return L("Ошибка ввода-вывода: %@", detail)
+            }
+        }
+    }
+
+    /// Where received files land: the app's Documents, so they show up in Files.
+    static var inbox: URL { VMConfig.documents.appendingPathComponent("Guest") }
+    /// Where sent files land in the guest.
+    static let guestDirectory = "/var/mobile/Inferno"
+    /// The guest's name for this app, as slirp presents it.
+    private static let hostAddress = "10.0.2.2"
+
+    private let serial: SerialConsole
+    private let linkUp: () -> Bool
+    private let bringNetworkUp: () -> Void
+
+    init(serial: SerialConsole, linkUp: @escaping () -> Bool, bringNetworkUp: @escaping () -> Void) {
+        self.serial = serial
+        self.linkUp = linkUp
+        self.bringNetworkUp = bringNetworkUp
+    }
+
+    // MARK: - To the guest
+
+    /// Returns the path the file ended up at inside the guest.
+    func send(_ file: URL, progress: @escaping (Int64, Int64) -> Void) throws -> String {
+        try requireNetwork()
+        return try serial.exclusive { try sendExclusively(file, progress: progress) }
+    }
+
+    private func sendExclusively(_ file: URL, progress: @escaping (Int64, Int64) -> Void) throws -> String {
+        let shell = GuestShell(serial: serial)
+        try openDestination(shell)
+
+        let name = Self.safeName(file.lastPathComponent)
+        // Built around the guest's own variable rather than spelled out: the
+        // folder it points at has spaces in its name, and a path with spaces is
+        // one more thing to get wrong on a console that drops bytes.
+        let remote = "\"$F/Inferno/\"" + Self.quote(name)
+        let handle: FileHandle
+        do { handle = try FileHandle(forReadingFrom: file) }
+        catch { throw Failure.io(error.localizedDescription) }
+        defer { try? handle.close() }
+        let total = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+
+        let listener = try LoopbackListener()
+        // `remote` is already a shell expression, quotes and all. Quoting it a
+        // second time turned the path into a filename with quotes in it, and
+        // the file was never written at all.
+        shell.send("exec 3<>/dev/tcp/\(Self.hostAddress)/\(listener.port);cat<&3>\(remote);exec 3<&-\n")
+        guard let conn = listener.accept(timeout: 60) else {
+            shell.reset()
+            throw Failure.noConnection
+        }
+        defer { Darwin.close(conn) }
+
+        var sum = PosixChecksum()
+        var sent: Int64 = 0
+        while true {
+            let chunk: Data
+            do { chunk = try handle.read(upToCount: 64 * 1024) ?? Data() }
+            catch { throw Failure.io(error.localizedDescription) }
+            if chunk.isEmpty { break }
+            try chunk.withUnsafeBytes { raw in
+                sum.update(raw)
+                var offset = 0
+                while offset < raw.count {
+                    let n = Darwin.send(conn, raw.baseAddress! + offset, raw.count - offset, 0)
+                    if n <= 0 { throw Failure.io(String(cString: strerror(errno))) }
+                    offset += n
+                }
+            }
+            sent += Int64(chunk.count)
+            progress(sent, max(total, sent))
+        }
+
+        // The guest closes its end once `cat` has read everything; only then
+        // is the file complete and worth checking.
+        shutdown(conn, SHUT_WR)
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        while Darwin.recv(conn, &scratch, scratch.count, 0) > 0 {}
+
+        try verify(shell, path: remote, sum)
+        // Root wrote it; the phone's own user has to be able to open it.
+        shell.send("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null\n")
+        return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
+    }
+
+    /// Points the guest's `$F` at somewhere its own Files app will look.
+    ///
+    /// A file dropped in `/var/mobile/Inferno` is invisible from inside the
+    /// guest: the Files app shows "On My iPhone" out of the local provider's
+    /// own container, which lives under an app group whose name is a UUID —
+    /// different on every device, so it has to be asked for rather than known.
+    ///
+    /// The path is left in a shell variable instead of being carried back and
+    /// forth. It contains spaces, and the console is not the place for those.
+    /// If the glob matches nothing the variable holds a path that does not
+    /// exist, which the test below catches.
+    private func openDestination(_ shell: GuestShell) throws {
+        // The storage folder itself may not exist yet — the Files app creates it
+        // the first time something is saved locally, and on a fresh guest that
+        // has never happened. The group container is always there, though, and
+        // says what it belongs to in its own metadata, so that is what is looked
+        // for. Failing everything, the old place, which at least works.
+        shell.send("A=/var/mobile/Containers/Shared/AppGroup\n")
+        shell.send("G=$(grep -l LocalStorage $A/*/.com.apple*.plist 2>/dev/null|head -1)\n")
+        shell.send("[ -n \"$G\" ] && F=\"${G%/*}/File Provider Storage\" || F=/var/mobile\n")
+        shell.send("mkdir -p \"$F/Inferno\"\n")
+        try shell.requireAnswer("test -d \"$F/Inferno\" && echo 1 || echo 0")
+    }
+
+    // MARK: - From the guest
+
+    /// Returns where the file was saved on the phone.
+    func receive(_ remote: String, progress: @escaping (Int64, Int64) -> Void) throws -> URL {
+        try requireNetwork()
+        return try serial.exclusive { try receiveExclusively(remote, progress: progress) }
+    }
+
+    private func receiveExclusively(_ remote: String, progress: @escaping (Int64, Int64) -> Void) throws -> URL {
+        let shell = GuestShell(serial: serial)
+        let exists = try shell.requireAnswer("test -f \(quote(remote)) && echo 1 || echo 0", accepting: [0, 1])
+        guard exists == 1 else { throw Failure.notFound(remote) }
+        let total = shell.number("wc -c < \(quote(remote))") ?? 0
+
+        let fm = FileManager.default
+        try? fm.createDirectory(at: Self.inbox, withIntermediateDirectories: true)
+        let destination = Self.freeName(for: (remote as NSString).lastPathComponent, in: Self.inbox)
+        let partial = destination.appendingPathExtension("part")
+        fm.createFile(atPath: partial.path, contents: nil)
+        let out: FileHandle
+        do { out = try FileHandle(forWritingTo: partial) }
+        catch { throw Failure.io(error.localizedDescription) }
+
+        let listener = try LoopbackListener()
+        shell.send("cat \(quote(remote))>/dev/tcp/\(Self.hostAddress)/\(listener.port)\n")
+        guard let conn = listener.accept(timeout: 60) else {
+            try? out.close()
+            try? fm.removeItem(at: partial)
+            shell.reset()
+            throw Failure.noConnection
+        }
+
+        var sum = PosixChecksum()
+        var got: Int64 = 0
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        do {
+            defer { Darwin.close(conn) }
+            while true {
+                let n = buffer.withUnsafeMutableBytes { Darwin.recv(conn, $0.baseAddress, $0.count, 0) }
+                if n < 0 { throw Failure.io(String(cString: strerror(errno))) }
+                if n == 0 { break }
+                try buffer.withUnsafeBytes { raw in
+                    let piece = UnsafeRawBufferPointer(rebasing: raw[0..<n])
+                    sum.update(piece)
+                    do { try out.write(contentsOf: Data(piece)) }
+                    catch { throw Failure.io(error.localizedDescription) }
+                }
+                got += Int64(n)
+                progress(got, max(total, got))
+            }
+            try out.close()
+            try verify(shell, path: quote(remote), sum)
+        } catch {
+            try? out.close()
+            try? fm.removeItem(at: partial)
+            throw error
+        }
+
+        do { try fm.moveItem(at: partial, to: destination) }
+        catch { throw Failure.io(error.localizedDescription) }
+        return destination
+    }
+
+    // MARK: - Helpers
+
+    private func requireNetwork() throws {
+        if linkUp() { return }
+        // The emulator already tried everything the USB side allows; what is
+        // left is asking the guest to configure its interface itself.
+        bringNetworkUp()
+        let deadline = Date().addingTimeInterval(25)
+        while Date() < deadline {
+            if linkUp() { return }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        throw Failure.networkDown
+    }
+
+    /// `path` is already quoted for the guest's shell — it may be a plain
+    /// quoted string, or one built around a variable the guest holds.
+    private func verify(_ shell: GuestShell, path: String, _ sum: PosixChecksum) throws {
+        // cksum walks the whole file, and the guest is not fast.
+        let slack = 60 + Double(sum.length) / 200_000
+        let size = shell.number("wc -c < \(path)", timeout: slack)
+        let crc = shell.number("cksum < \(path) | cut -d' ' -f1", timeout: slack)
+        guard size == sum.length, crc == Int64(sum.value) else {
+            throw Failure.mismatch("в госте \(size.map(String.init) ?? "?") Б, у нас \(sum.length) Б")
+        }
+    }
+
+    private func quote(_ path: String) -> String { Self.quote(path) }
+
+    /// Quotes a path for the guest's shell without putting a single non-ASCII
+    /// byte on the command line.
+    ///
+    /// The console hands bytes above 0x7F to bash in a way that breaks the line:
+    /// a command with a Cyrillic file name never completes, and bash is left
+    /// waiting inside it. `$'…'` with octal escapes spells the same bytes in
+    /// plain ASCII, so the name survives exactly while the line stays safe.
+    static func quote(_ path: String) -> String {
+        let bytes = Array(path.utf8)
+        if bytes.allSatisfy({ $0 >= 0x20 && $0 < 0x7F }) {
+            return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        var out = "$'"
+        for byte in bytes {
+            if byte >= 0x20, byte < 0x7F, byte != UInt8(ascii: "'"), byte != UInt8(ascii: "\\") {
+                out.append(Character(Unicode.Scalar(byte)))
+            } else {
+                out += String(format: "\\%03o", byte)
+            }
+        }
+        return out + "'"
+    }
+
+    /// A name that cannot break a command line: no slashes, nothing a terminal
+    /// would act on.
+    static func safeName(_ name: String) -> String {
+        let cleaned = String(name.unicodeScalars.filter { $0.value >= 0x20 && $0 != "/" && $0.value != 0x7F })
+        return cleaned.isEmpty ? "file" : cleaned
+    }
+
+    /// Keeps earlier files: `a.txt`, then `a 2.txt`, like Files itself does.
+    static func freeName(for name: String, in directory: URL) -> URL {
+        let safe = safeName(name)
+        let base = (safe as NSString).deletingPathExtension
+        let ext = (safe as NSString).pathExtension
+        var candidate = directory.appendingPathComponent(safe)
+        var index = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let numbered = ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)"
+            candidate = directory.appendingPathComponent(numbered)
+            index += 1
+        }
+        return candidate
+    }
+}
+
+/// The guest's shell as a request/response channel: commands go in through the
+/// console, answers are picked out of what it prints by a marker only the guest
+/// can produce. The marker is assembled from shell variables, so the echo of the
+/// command shows `$v$t` while the answer shows `VAL1a2b` — the two can never be
+/// mistaken for each other.
+private final class GuestShell {
+    private let serial: SerialConsole
+    private let lock = NSLock()
+    private var buffer = Data()
+    private let arrived = DispatchSemaphore(value: 0)
+    private var token: UUID?
+
+    init(serial: SerialConsole) {
+        self.serial = serial
+        token = serial.tap { [weak self] data in self?.append(data) }
+    }
+
+    deinit {
+        if let token { serial.untap(token) }
+    }
+
+    private func append(_ data: Data) {
+        lock.lock()
+        buffer.append(data)
+        if buffer.count > 1 << 20 { buffer.removeFirst(buffer.count - (1 << 19)) }
+        lock.unlock()
+        arrived.signal()
+    }
+
+    func send(_ text: String) { serial.send(text) }
+
+    /// Waits for the marker and a newline after it; returns what follows it.
+    func wait(for marker: String, timeout: TimeInterval) -> String? {
+        let needle = Data(marker.utf8)
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            lock.lock()
+            if let found = buffer.range(of: needle),
+               let newline = buffer[found.upperBound...].firstIndex(of: 0x0A) {
+                let rest = String(decoding: buffer[found.upperBound..<newline], as: UTF8.self)
+                buffer.removeSubrange(buffer.startIndex...newline)
+                lock.unlock()
+                return rest.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            lock.unlock()
+            let left = deadline.timeIntervalSinceNow
+            if left <= 0 { return nil }
+            _ = arrived.wait(timeout: .now() + min(left, 0.5))
+        }
+    }
+
+    /// A line printed by the guest, read off the marker's own line.
+    func text(_ expression: String, timeout: TimeInterval = 20) -> String? {
+        let tag = String(format: "%04x", UInt16.random(in: 0...UInt16.max))
+        send("v=VAL; t=\(tag); echo \"$v$t $(\(expression))\"\n")
+        return wait(for: "VAL" + tag, timeout: timeout)
+    }
+
+    /// A number computed in the guest, read off the marker's own line — never
+    /// out of free output, which carries the prompt and kernel lines with
+    /// numbers of their own.
+    func number(_ expression: String, timeout: TimeInterval = 30) -> Int64? {
+        let tag = String(format: "%04x", UInt16.random(in: 0...UInt16.max))
+        send("v=VAL; t=\(tag); echo \"$v$t $(\(expression))\"\n")
+        guard let rest = wait(for: "VAL" + tag, timeout: timeout),
+              let first = rest.split(separator: " ").first
+        else { return nil }
+        return Int64(first)
+    }
+
+    /// Runs a check that must answer with one of `accepting`; one retry after
+    /// clearing a line that lost bytes on the way in.
+    @discardableResult
+    func requireAnswer(_ expression: String, accepting: Set<Int64> = [1]) throws -> Int64 {
+        for attempt in 0..<2 {
+            if let answer = number(expression), accepting.contains(answer) { return answer }
+            if attempt == 0 { reset() }
+        }
+        throw GuestFiles.Failure.noShell
+    }
+
+    /// Clears a line mangled by lost bytes, or an unclosed quote left behind by
+    /// one. Ctrl-C, never Ctrl-D: the latter would end the shell, and the bash
+    /// daemon on older images has no KeepAlive to bring it back.
+    func reset() {
+        send("\u{03}")
+        Thread.sleep(forTimeInterval: 0.5)
+        send("\n")
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+}
+
+/// A one-connection listener on the loopback, on a port the kernel picks.
+final class LoopbackListener {
+    let fd: Int32
+    let port: UInt16
+
+    init() throws {
+        let s = socket(AF_INET, SOCK_STREAM, 0)
+        guard s >= 0 else { throw GuestFiles.Failure.io("socket(): \(String(cString: strerror(errno)))") }
+        var one: Int32 = 1
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(s, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(s, 1) == 0 else {
+            let reason = String(cString: strerror(errno))
+            Darwin.close(s)
+            throw GuestFiles.Failure.io("bind/listen: \(reason)")
+        }
+
+        var actual = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(s, $0, &length) }
+        }
+        fd = s
+        port = UInt16(bigEndian: actual.sin_port)
+    }
+
+    deinit { Darwin.close(fd) }
+
+    func accept(timeout: TimeInterval) -> Int32? {
+        var probe = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        guard poll(&probe, 1, Int32(timeout * 1000)) > 0 else { return nil }
+        let conn = Darwin.accept(fd, nil, nil)
+        guard conn >= 0 else { return nil }
+        var one: Int32 = 1
+        setsockopt(conn, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        var tv = timeval(tv_sec: 120, tv_usec: 0)
+        setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        return conn
+    }
+}
+
+/// The number `cksum` prints in the guest: CRC-32/CKSUM with the length folded
+/// in at the end. The guest has neither md5 nor shasum, so this is the check
+/// both sides can compute.
+struct PosixChecksum {
+    private static let table: [UInt32] = (0..<256).map { index in
+        var crc = UInt32(index) << 24
+        for _ in 0..<8 { crc = (crc & 0x8000_0000) != 0 ? (crc << 1) ^ 0x04C1_1DB7 : crc << 1 }
+        return crc
+    }
+
+    private var crc: UInt32 = 0
+    private(set) var length: Int64 = 0
+
+    mutating func update(_ bytes: UnsafeRawBufferPointer) {
+        var value = crc
+        for byte in bytes {
+            value = (value << 8) ^ Self.table[Int(((value >> 24) ^ UInt32(byte)) & 0xFF)]
+        }
+        crc = value
+        length += Int64(bytes.count)
+    }
+
+    var value: UInt32 {
+        var value = crc
+        var remaining = length
+        while remaining > 0 {
+            value = (value << 8) ^ Self.table[Int(((value >> 24) ^ UInt32(remaining & 0xFF)) & 0xFF)]
+            remaining >>= 8
+        }
+        return ~value
+    }
+}
