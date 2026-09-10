@@ -68,7 +68,10 @@ cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 # partial plist, which is merged rather than transcribed — that way a change in
 # the icon does not need a change here.
 ICON="$ROOT/Resources/Inferno.icon"
-if [ -d "$ICON" ]; then
+# Icon Composer's .icon bundle needs Xcode 26+. Where that is not available
+# (older CI images), INFERNO_NO_ICON=1 skips it — the app just ships without a
+# rendered icon.
+if [ -d "$ICON" ] && [ -z "${INFERNO_NO_ICON:-}" ]; then
     echo "==> Иконка"
     xcrun actool --compile "$APP" \
         --platform iphoneos \

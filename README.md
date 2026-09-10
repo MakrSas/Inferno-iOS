@@ -195,6 +195,22 @@ app icon with `actool`, ad-hoc signs everything and produces `Inferno.ipa`. Besi
 line tools it needs QEMU's keymaps — `brew install qemu` provides them, or point `INFERNO_KEYMAPS`
 at a copy. There is no Xcode project.
 
+### Without a Mac — GitHub Actions
+
+[`.github/workflows/build-ipa.yml`](.github/workflows/build-ipa.yml) does all of the above on
+GitHub's own macOS runners, so a fork can produce an installable (unsigned) `Inferno.ipa` without
+anyone owning a Mac. It runs on every push to `main`, on `workflow_dispatch`, and — attaching the
+`.ipa` to the release — on any `v*` tag.
+
+The nine iOS dependencies are built from source by
+[`scripts/build-ios-deps.sh`](scripts/build-ios-deps.sh) (which also works locally:
+`PREFIX=$PWD/prefix scripts/build-ios-deps.sh`) and the resulting `prefix/` is cached, keyed on that
+script and the runner's Xcode, so only the first run pays the ~20-minute cost. The workflow still
+does not touch any guest image, firmware or Apple key — those are yours to build.
+
+The runner's Xcode has no Icon Composer, so CI builds set `INFERNO_NO_ICON=1` and ship without the
+rendered app icon; a local build on Xcode 26 keeps it.
+
 ---
 
 ## Issues and ideas
