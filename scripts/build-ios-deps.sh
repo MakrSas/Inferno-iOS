@@ -70,9 +70,21 @@ needs_exe_wrapper = true
 pkg_config_libdir = ['$PREFIX/lib/pkgconfig']
 EOF
 
-fetch() { # fetch <url> <out.tar>
-    local url="$1" out="$2"
-    [ -f "$out" ] || curl -fL --retry 3 -o "$out" "$url"
+fetch() { # fetch <out.tar> <url> [url...]
+    local out="$1"; shift
+    [ -f "$out" ] && return 0
+    local url
+    for url in "$@"; do
+        echo "    fetch $url"
+        if curl -fL --connect-timeout 20 --retry 5 --retry-all-errors \
+                --speed-limit 1024 --speed-time 30 -o "$out" "$url"; then
+            return 0
+        fi
+        echo "    ...failed, trying next mirror" >&2
+        rm -f "$out"
+    done
+    echo "could not download $out" >&2
+    return 1
 }
 untar() { # untar <tar> <dest-dir>
     local t="$1" d="$2"
@@ -102,53 +114,73 @@ echo "==> prefix: $PREFIX"
 echo "==> SDK:    $SDK"
 
 # ── zlib ──────────────────────────────────────────────────────────────────
-fetch "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz" zlib.tar.gz
+fetch zlib.tar.gz \
+    "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz" \
+    "https://zlib.net/zlib-1.3.1.tar.gz"
 untar zlib.tar.gz zlib
 ( cd zlib && ./configure --prefix="$PREFIX" --static && make -j"$JOBS" && make install )
 
 # ── GMP ───────────────────────────────────────────────────────────────────
-fetch "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" gmp.tar.xz
+fetch gmp.tar.xz \
+    "https://ftpmirror.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" \
+    "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz" \
+    "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
 untar gmp.tar.xz gmp
 conf_build gmp --disable-assembly
 
 # ── nettle (+ hogweed, needs GMP) ────────────────────────────────────────
-fetch "https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz" nettle.tar.gz
+fetch nettle.tar.gz \
+    "https://ftpmirror.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz" \
+    "https://mirrors.kernel.org/gnu/nettle/nettle-3.10.2.tar.gz" \
+    "https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz"
 untar nettle.tar.gz nettle
 conf_build nettle --disable-documentation --disable-openssl --disable-assembler
 
 # ── libtasn1 ──────────────────────────────────────────────────────────────
-fetch "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz" libtasn1.tar.gz
+fetch libtasn1.tar.gz \
+    "https://ftpmirror.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz" \
+    "https://mirrors.kernel.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz" \
+    "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz"
 untar libtasn1.tar.gz libtasn1
 conf_build libtasn1 --disable-doc
 
 # ── libpng ────────────────────────────────────────────────────────────────
-fetch "https://github.com/pnggroup/libpng/releases/download/v1.6.44/libpng-1.6.44.tar.gz" libpng.tar.gz
+fetch libpng.tar.gz \
+    "https://github.com/pnggroup/libpng/releases/download/v1.6.44/libpng-1.6.44.tar.gz" \
+    "https://downloads.sourceforge.net/libpng/libpng-1.6.44.tar.gz"
 untar libpng.tar.gz libpng
 conf_build libpng --disable-tools
 
 # ── pixman ────────────────────────────────────────────────────────────────
-fetch "https://www.cairographics.org/releases/pixman-0.44.2.tar.gz" pixman.tar.gz
+fetch pixman.tar.gz \
+    "https://www.cairographics.org/releases/pixman-0.44.2.tar.gz" \
+    "https://gitlab.freedesktop.org/pixman/pixman/-/archive/pixman-0.44.2/pixman-pixman-0.44.2.tar.gz"
 untar pixman.tar.gz pixman
 meson_build pixman -Dtests=disabled -Ddemos=disabled -Dgtk=disabled
 
 # ── glib (with its own libffi, pcre2, proxy-libintl — absent from the iOS SDK) ─
-fetch "https://download.gnome.org/sources/glib/2.84/glib-2.84.3.tar.xz" glib.tar.xz
+fetch glib.tar.xz \
+    "https://download.gnome.org/sources/glib/2.84/glib-2.84.3.tar.xz" \
+    "https://ftp.acc.umu.se/pub/gnome/sources/glib/2.84/glib-2.84.3.tar.xz"
 untar glib.tar.xz glib
 meson_build glib -Dtests=false -Ddtrace=disabled -Dintrospection=disabled \
     -Dnls=enabled -Dlibmount=disabled -Dselinux=disabled
 
 # ── libslirp (needs glib) ────────────────────────────────────────────────
-fetch "https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.9.1/libslirp-v4.9.1.tar.gz" libslirp.tar.gz
+fetch libslirp.tar.gz \
+    "https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.9.1/libslirp-v4.9.1.tar.gz"
 untar libslirp.tar.gz libslirp
 meson_build libslirp
 
 # ── libucontext (QEMU's coroutine backend: iOS has no usable sigaltstack) ─
-fetch "https://github.com/kaniini/libucontext/archive/refs/tags/v1.3.2.tar.gz" libucontext.tar.gz
+fetch libucontext.tar.gz \
+    "https://github.com/kaniini/libucontext/archive/refs/tags/v1.3.2.tar.gz"
 untar libucontext.tar.gz libucontext
 meson_build libucontext -Dexport_unprefixed=true
 
 # ── lzfse ────────────────────────────────────────────────────────────────
-fetch "https://github.com/lzfse/lzfse/archive/refs/tags/lzfse-1.0.tar.gz" lzfse.tar.gz
+fetch lzfse.tar.gz \
+    "https://github.com/lzfse/lzfse/archive/refs/tags/lzfse-1.0.tar.gz"
 untar lzfse.tar.gz lzfse
 make -C lzfse -j"$JOBS" CC="$CC" INSTALL_PREFIX="$PREFIX"
 make -C lzfse install INSTALL_PREFIX="$PREFIX"
