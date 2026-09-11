@@ -42,7 +42,9 @@ jobs:
 
       - name: Build tools
         run: |
-          brew install --quiet meson ninja pkg-config autoconf automake libtool m4 qemu
+          # ldid подписывает помощника для гостя (nsio) с правами на блочные
+          # устройства; без него build.sh соберёт приложение без быстрого канала.
+          brew install --quiet meson ninja pkg-config autoconf automake libtool m4 qemu ldid
           echo "$(brew --prefix m4)/bin" >> "$GITHUB_PATH"
 
       - name: Environment fingerprint (cache key)

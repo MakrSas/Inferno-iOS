@@ -106,6 +106,18 @@ if [ -z "${INFERNO_NO_ICON:-}" ]; then
     fi
 fi
 
+echo "==> Помощник для гостя (nsio)"
+# Читать и писать namespace NVMe внутри гостя может только бинарник с правами:
+# шеллу блочные устройства закрыты. Помощник едет в бандле, приложение кладёт
+# его в гостя один раз. Без него установка .ipa не ломается — она просто идёт по
+# сети, которая в разы медленнее.
+if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1; then
+    mkdir -p "$APP/guest-tools"
+    "$ROOT/../netlab/build-nsio.sh" "$APP/guest-tools/nsio" >/dev/null
+else
+    echo "    нет ldid — собираю без помощника (быстрый канал будет недоступен)"
+fi
+
 echo "==> Подпись"
 # The dylib is signed first: the app's seal covers it.
 codesign --force --sign - --timestamp=none "$APP/Frameworks/$(basename "$DYLIB")"

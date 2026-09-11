@@ -276,6 +276,45 @@ enum L10n {
         "  адрес не меняется — поток стоит на одной инструкции":
             "  the address does not move — the thread is stuck on one instruction",
         "Аргументы:\n  ": "Arguments:\n  ",
+
+        // Installing an .ipa into the guest
+        "Установить .ipa в гостя…": "Install an .ipa in the guest…",
+        "Это не .ipa: внутри нет оглавления zip.": "That is not an .ipa: there is no zip directory inside.",
+        "В архиве есть то, что я не умею разбирать: %@":
+            "The archive holds something I cannot read: %@",
+        "Архив повреждён: %@": "The archive is damaged: %@",
+        "способ сжатия %d": "compression method %d",
+        "В .ipa нет папки Payload — это не приложение.":
+            "The .ipa has no Payload folder — that is not an app.",
+        "В Payload нет ни одного .app.": "There is no .app inside Payload.",
+        "Шелл гостя не отвечает. Установка работает только с бутстрапом, где на консоли сидит bash.":
+            "The guest's shell does not answer. Installing needs the bootstrap, with bash on the console.",
+        "Шаг «%@» в госте вернул %d.": "The step “%@” returned %d in the guest.",
+        "Не удалось занести помощника в гостя: %@":
+            "Could not put the helper into the guest: %@",
+        "в приложении его нет": "it is not in the app",
+        "не удалось сделать исполняемым": "it could not be made executable",
+        "Распаковываю .ipa…": "Unpacking the .ipa…",
+        "Канал: USB-сеть.": "Channel: the USB network.",
+        "Канал: NVMe, %@.": "Channel: NVMe, %@.",
+        "Ставлю помощника в гостя — это один раз…":
+            "Putting the helper into the guest — this happens once…",
+        "перемонтирую корень": "remounting the root",
+        "убираю прежнюю копию": "removing the previous copy",
+        "распаковываю": "unpacking",
+        "права": "permissions",
+        "показываю SpringBoard": "telling SpringBoard",
+        "прибираю": "tidying up",
+        "проверка": "the check",
+        "чтение носителя": "reading the namespace",
+        "Нужен файл .ipa.": "An .ipa file is needed.",
+        "Установлено: %@": "Installed: %@",
+        "→ установка %@": "→ installing %@",
+        "помощника нет в приложении": "the helper is not in the app",
+        "помощника не удалось сделать исполняемым": "the helper could not be made executable",
+        "гость не прочитал носитель (%d)": "the guest did not read the namespace (%d)",
+        "гость не записал носитель (%d)": "the guest did not write the namespace (%d)",
+        "в госте %@ Б, у нас %d Б": "%@ bytes in the guest, %d here",
     ]
 
     static func string(_ russian: String) -> String {

@@ -38,6 +38,27 @@ struct VMConfig {
     }
 
     static var dataDirectory: URL { documents.appendingPathComponent("InfernoData") }
+
+    /// The scratch namespace both sides reach: the app writes bytes into this
+    /// file, the guest reads the same place as a block device.
+    static var transferImage: URL { dataDirectory.appendingPathComponent("xfer") }
+    /// Sixteen mebibytes, and sparse, so it costs nothing until it is used. A
+    /// gibibyte is not required: that floor applies only to a namespace with
+    /// nstype=1, which is the root disk.
+    static let transferBytes: Int64 = 16 * 1024 * 1024
+
+    /// Creates the scratch namespace if it is not there yet.
+    static func ensureTransferImage() {
+        let path = transferImage.path
+        guard !FileManager.default.fileExists(atPath: path) else { return }
+        guard FileManager.default.createFile(atPath: path, contents: nil) else { return }
+        // Truncated rather than written: the file reads as zeroes and occupies
+        // only the blocks that are actually used.
+        if let handle = try? FileHandle(forWritingTo: transferImage) {
+            try? handle.truncate(atOffset: UInt64(transferBytes))
+            try? handle.close()
+        }
+    }
     /// Where the emulator must chdir to before the sockets below resolve.
     static var socketDirectory: String { NSTemporaryDirectory() }
     static let usbSocketName = "inferno-usb.sock"

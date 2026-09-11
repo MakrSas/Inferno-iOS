@@ -67,9 +67,39 @@ final class GuestFiles {
     // MARK: - To the guest
 
     /// Returns the path the file ended up at inside the guest.
+    ///
+    /// The network is no longer demanded up front: with the helper already in
+    /// the guest the bytes ride the namespace, and that works whether or not
+    /// the link is up. It is asked for only when the slow path is the one left.
     func send(_ file: URL, progress: @escaping (Int64, Int64) -> Void) throws -> String {
+        try serial.exclusive { try sendExclusively(file, progress: progress) }
+    }
+
+    /// Moves a local file to an exact path in the guest by the fastest channel
+    /// there is, falling back to the network. Shared by the file menu and the
+    /// `.ipa` installer, so both get the same speed and the same checking.
+    func carry(_ file: URL, to remote: String, shell: GuestShell,
+               progress: @escaping (Int64, Int64) -> Void,
+               note: @escaping (String) -> Void) throws {
+        if let fast = fastChannel(shell, note: note) {
+            note(L("Канал: NVMe, %@.", fast.device))
+            try fast.send(file, to: remote, shell: shell, progress: progress)
+            return
+        }
+        note(L("Канал: USB-сеть."))
         try requireNetwork()
-        return try serial.exclusive { try sendExclusively(file, progress: progress) }
+        try stream(file, to: remote, shell: shell, progress: progress)
+    }
+
+    /// The fast channel, or nil when the emulator does not offer one. Looked up
+    /// once per transfer: finding it costs a couple of short commands.
+    private func fastChannel(_ shell: GuestShell, note: @escaping (String) -> Void) -> TransferNamespace? {
+        TransferNamespace.discover(shell: shell, deliver: { local, path in
+            // The helper itself can only come in the slow way — it is what makes
+            // the fast way possible.
+            try self.requireNetwork()
+            try self.stream(local, to: Self.quote(path), shell: shell, progress: { _, _ in })
+        }, note: note)
     }
 
     private func sendExclusively(_ file: URL, progress: @escaping (Int64, Int64) -> Void) throws -> String {
@@ -81,6 +111,16 @@ final class GuestFiles {
         // folder it points at has spaces in its name, and a path with spaces is
         // one more thing to get wrong on a console that drops bytes.
         let remote = "\"$F/Inferno/\"" + Self.quote(name)
+        try carry(file, to: remote, shell: shell, progress: progress, note: { _ in })
+        // Root wrote it; the phone's own user has to be able to open it.
+        shell.send("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null\n")
+        return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
+    }
+
+    /// The transfer itself. `remote` is already a shell expression — a quoted
+    /// path, or one built around a variable the guest holds.
+    private func stream(_ file: URL, to remote: String, shell: GuestShell,
+                        progress: @escaping (Int64, Int64) -> Void) throws {
         let handle: FileHandle
         do { handle = try FileHandle(forReadingFrom: file) }
         catch { throw Failure.io(error.localizedDescription) }
@@ -125,9 +165,6 @@ final class GuestFiles {
         while Darwin.recv(conn, &scratch, scratch.count, 0) > 0 {}
 
         try verify(shell, path: remote, sum)
-        // Root wrote it; the phone's own user has to be able to open it.
-        shell.send("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null\n")
-        return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
     }
 
     /// Points the guest's `$F` at somewhere its own Files app will look.
@@ -158,8 +195,7 @@ final class GuestFiles {
 
     /// Returns where the file was saved on the phone.
     func receive(_ remote: String, progress: @escaping (Int64, Int64) -> Void) throws -> URL {
-        try requireNetwork()
-        return try serial.exclusive { try receiveExclusively(remote, progress: progress) }
+        try serial.exclusive { try receiveExclusively(remote, progress: progress) }
     }
 
     private func receiveExclusively(_ remote: String, progress: @escaping (Int64, Int64) -> Void) throws -> URL {
@@ -177,6 +213,23 @@ final class GuestFiles {
         do { out = try FileHandle(forWritingTo: partial) }
         catch { throw Failure.io(error.localizedDescription) }
 
+        // The namespace carries it whole, and checks it, without the console or
+        // the network being involved in the bytes at all.
+        if let fast = fastChannel(shell, note: { _ in }) {
+            do {
+                try fast.receive(quote(remote), to: partial, shell: shell, progress: progress)
+                try? out.close()
+                do { try fm.moveItem(at: partial, to: destination) }
+                catch { throw Failure.io(error.localizedDescription) }
+                return destination
+            } catch {
+                try? out.close()
+                try? fm.removeItem(at: partial)
+                throw error
+            }
+        }
+
+        try requireNetwork()
         let listener = try LoopbackListener()
         shell.send("cat \(quote(remote))>/dev/tcp/\(Self.hostAddress)/\(listener.port)\n")
         guard let conn = listener.accept(timeout: 60) else {
@@ -297,7 +350,7 @@ final class GuestFiles {
 /// can produce. The marker is assembled from shell variables, so the echo of the
 /// command shows `$v$t` while the answer shows `VAL1a2b` — the two can never be
 /// mistaken for each other.
-private final class GuestShell {
+final class GuestShell {
     private let serial: SerialConsole
     private let lock = NSLock()
     private var buffer = Data()
@@ -360,6 +413,14 @@ private final class GuestShell {
               let first = rest.split(separator: " ").first
         else { return nil }
         return Int64(first)
+    }
+
+    /// Runs a command and hands back its exit status, with the output thrown
+    /// away. The command must not end in a pipe: the status would then be the
+    /// last stage's, and `head` succeeds however badly the command before it
+    /// failed.
+    func run(_ command: String, timeout: TimeInterval = 120) -> Int64? {
+        number("{ \(command) ;} >/dev/null 2>&1; echo $?", timeout: timeout)
     }
 
     /// Runs a check that must answer with one of `accepting`; one retry after

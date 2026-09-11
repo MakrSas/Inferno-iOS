@@ -327,6 +327,56 @@ final class VMModel: ObservableObject {
         }
     }
 
+    /// One button: unpack the `.ipa` here, carry it in by whichever channel is
+    /// available, and put it in `/Applications`. The first run also leaves the
+    /// helper in the guest, so every later install finds it already there.
+    func installIPA(_ url: URL) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        guard url.pathExtension.lowercased() == "ipa" else {
+            transfer = .failed(L("Нужен файл .ipa.")); return
+        }
+        let name = url.lastPathComponent
+        transfer = .running(title: L("→ установка %@", name), done: 0, total: 0)
+        LogCapture.shared.note("Установка: \(name)")
+        let installer = GuestInstaller(serial: serial, files: files)
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Files picked from the Files app are lent, not given.
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let started = Date()
+            // Which step is running, so the progress bar keeps saying it while
+            // the bytes move. Both closures are called from this thread, one
+            // after another, so the plain variable is enough.
+            var phase = L("→ установка %@", name)
+            do {
+                var last = Date.distantPast
+                let target = try installer.install(ipa: url, progress: { done, total in
+                    guard Date().timeIntervalSince(last) > 0.1 || done == total else { return }
+                    last = Date()
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: phase, done: done, total: total)
+                    }
+                }, note: { line in
+                    phase = line
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: line, done: 0, total: 0)
+                    }
+                })
+                let summary = TransferState.summary(url: url, seconds: Date().timeIntervalSince(started))
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Установлено: %@", target) + "\n" + summary)
+                    LogCapture.shared.note("Установка: \(name) → \(target), \(summary)")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note("Установка: \(name) — \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     func receiveFromGuest(_ path: String) {
         let remote = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !remote.isEmpty, transfer?.isRunning != true else { return }
@@ -445,6 +495,7 @@ struct RootView: View {
     @State private var pane: Pane = .screen
     @State private var fullScreen = false
     @State private var pickFile = false
+    @State private var pickIPA = false
     @State private var askPath = false
     @State private var guestPath = "/var/mobile/"
     /// Where the button sits, as a fraction of the view, so that it stays put
@@ -502,7 +553,7 @@ struct RootView: View {
                         if !fullScreen {
                             GeometryReader { geo in
                                 ControlMenu(model: model, pane: $pane, fullScreen: $fullScreen,
-                                            pickFile: $pickFile, askPath: $askPath)
+                                            pickFile: $pickFile, pickIPA: $pickIPA, askPath: $askPath)
                                     .position(menuPoint(in: geo))
                                     // Simultaneous, so a tap still opens the
                                     // menu and only a real drag moves it.
@@ -522,6 +573,11 @@ struct RootView: View {
             // settings sheet, and two sheet-like presentations on one view fight.
             .fileImporter(isPresented: $pickFile, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result { model.sendToGuest(url) }
+            }
+            // A second importer, not a second sheet: only one of the two is ever
+            // presented, so they do not fight the way two sheets would.
+            .fileImporter(isPresented: $pickIPA, allowedContentTypes: [.item]) { result in
+                if case .success(let url) = result { model.installIPA(url) }
             }
             .alert(L("Забрать файл из гостя"), isPresented: $askPath) {
                 TextField(L("Путь в госте"), text: $guestPath)
@@ -563,6 +619,7 @@ struct ControlMenu: View {
     @Binding var pane: Pane
     @Binding var fullScreen: Bool
     @Binding var pickFile: Bool
+    @Binding var pickIPA: Bool
     @Binding var askPath: Bool
     @State private var showSettings = false
     @State private var confirmQuit = false
@@ -613,6 +670,9 @@ struct ControlMenu: View {
                 }
                 Button(L("Забрать файл из гостя…"), systemImage: "square.and.arrow.down") {
                     askPath = true
+                }
+                Button(L("Установить .ipa в гостя…"), systemImage: "arrow.down.app") {
+                    pickIPA = true
                 }
             }
             .disabled(!model.isRunning || model.transfer?.isRunning == true)
