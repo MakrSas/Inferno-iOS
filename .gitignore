@@ -66,8 +66,10 @@ Payload/
 # Ставится сборочным скриптом, отметка времени — не исходник.
 app/Sources/BuildInfo.swift
 
-# Создаётся make-cross-file.sh: пути к SDK и к зависимостям у каждого свои.
+# Создаётся make-cross-file.sh / make-android-cross-file.sh: пути к SDK и к
+# зависимостям у каждого свои.
 cross-ios-arm64.txt
+cross-android-arm64.txt
 
 # ── Форк эмулятора ─────────────────────────────────────────────────────────
 #
