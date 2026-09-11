@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window itself is bare: every screen is Compose content drawn
+         edge-to-edge, with Material 3 (and dynamic color on 12+) doing the
+         actual theming in Theme.kt. This exists so the system has something
+         to show before Compose is up, and to host the splash-screen theme
+         below. -->
+    <style name="Theme.Inferno" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <style name="Theme.Inferno.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Inferno</item>
+    </style>
+</resources>

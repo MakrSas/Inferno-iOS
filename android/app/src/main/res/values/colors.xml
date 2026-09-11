@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same blue as the iOS app icon's gradient (SVG Image 5), used flat
+         here as the adaptive-icon background. -->
+    <color name="ic_launcher_background">#508CC8</color>
+</resources>

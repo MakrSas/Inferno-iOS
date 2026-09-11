@@ -1,0 +1,18 @@
+# Machine-specific: points at this computer's SDK install.
+local.properties
+
+.gradle/
+*/build/
+build/
+.cxx/
+captures/
+.externalNativeBuild/
+
+# Editors
+.idea/
+*.iml
+.DS_Store
+
+# Where the emulator's shared library lands once it is cross-compiled
+# (see ../ANDROID-PORT.md). Never a source file, and large.
+app/src/main/jniLibs/*/libqemu-aarch64-softmmu.so

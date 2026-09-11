@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Inferno</string>
+
+    <!-- Настройка -->
+    <string name="setup_title">Не хватает файлов</string>
+    <string name="setup_instructions">Выберите папку InfernoData и файл AppleSEPROM-Cebu-B1 — приложение скопирует их в своё хранилище.</string>
+    <string name="setup_pick_folder">Выбрать InfernoData…</string>
+    <string name="setup_pick_seprom">Выбрать AppleSEPROM-Cebu-B1…</string>
+    <string name="setup_missing_header">Не хватает</string>
+    <string name="setup_recheck">Проверить снова</string>
+    <string name="setup_copying">Копирую %1$s…</string>
+
+    <!-- Главный экран / меню -->
+    <string name="menu_view">Вид</string>
+    <string name="menu_view_screen">Экран</string>
+    <string name="menu_view_terminal">Терминал</string>
+    <string name="menu_machine">Машина</string>
+    <string name="menu_settings">Параметры…</string>
+    <string name="menu_start">Запустить</string>
+    <string name="menu_running">Запущена</string>
+    <string name="menu_stopped_relaunch">Остановлена — перезапустите приложение</string>
+    <string name="menu_fullscreen">Во весь экран</string>
+    <string name="menu_network_fix">Поднять сеть в госте</string>
+    <string name="menu_shutdown">Выключить машину…</string>
+    <string name="menu_shutdown_confirm_title">Выключить машину?</string>
+    <string name="menu_shutdown_confirm_body">QEMU допишет диски на файлы и завершится. Чтобы запустить машину заново, перезапустите приложение.</string>
+    <string name="action_cancel">Отмена</string>
+    <string name="action_shutdown">Выключить</string>
+    <string name="placeholder_open_menu">Откройте меню и запустите машину</string>
+    <string name="placeholder_boot_wait">Экран %1$d×%2$d подключён, ждём первый кадр</string>
+    <string name="placeholder_connecting">Машина работает, подключаемся к экрану…</string>
+    <string name="placeholder_failed">Экран недоступен: %1$s</string>
+    <string name="placeholder_stopped">Машина остановлена</string>
+
+    <!-- Параметры -->
+    <string name="settings_title">Параметры</string>
+    <string name="settings_screen">Экран</string>
+    <string name="settings_terminal">Терминал</string>
+    <string name="settings_terminal_follow">Следить за концом</string>
+    <string name="settings_network">Сеть</string>
+    <string name="settings_machine">Машина</string>
+    <string name="settings_diagnostics">Диагностика</string>
+    <string name="settings_apply_footer">Изменения применяются при следующем запуске машины. Перезапустите приложение, чтобы запустить её заново.</string>
+    <string name="settings_rounded_screen">Скруглять углы</string>
+    <string name="settings_show_fps">Счётчик кадров</string>
+    <string name="settings_smooth_upscale">Сглаживать при растягивании</string>
+    <string name="settings_network_toggle">Интернет через USB</string>
+    <string name="settings_network_autofix">Поднимать интерфейс в госте</string>
+    <string name="settings_cores">Всего vCPU</string>
+    <string name="settings_memory">Память</string>
+    <string name="settings_tcg_threads">Потоки TCG</string>
+    <string name="settings_tb_size">Буфер трансляций</string>
+    <string name="settings_build">Сборка</string>
+    <string name="action_done">Готово</string>
+</resources>

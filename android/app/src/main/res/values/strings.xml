@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Inferno</string>
+
+    <!-- Setup -->
+    <string name="setup_title">Files needed</string>
+    <string name="setup_instructions">Pick the InfernoData folder and the AppleSEPROM-Cebu-B1 file — the app copies them into its own storage.</string>
+    <string name="setup_pick_folder">Choose InfernoData…</string>
+    <string name="setup_pick_seprom">Choose AppleSEPROM-Cebu-B1…</string>
+    <string name="setup_missing_header">Still missing</string>
+    <string name="setup_recheck">Check again</string>
+    <string name="setup_copying">Copying %1$s…</string>
+
+    <!-- Home / control menu -->
+    <string name="menu_view">View</string>
+    <string name="menu_view_screen">Screen</string>
+    <string name="menu_view_terminal">Terminal</string>
+    <string name="menu_machine">Machine</string>
+    <string name="menu_settings">Settings…</string>
+    <string name="menu_start">Start</string>
+    <string name="menu_running">Running</string>
+    <string name="menu_stopped_relaunch">Stopped — relaunch the app</string>
+    <string name="menu_fullscreen">Full screen</string>
+    <string name="menu_network_fix">Bring the guest\'s network up</string>
+    <string name="menu_shutdown">Shut the machine down…</string>
+    <string name="menu_shutdown_confirm_title">Shut the machine down?</string>
+    <string name="menu_shutdown_confirm_body">QEMU will flush the disks and exit. Restart the app to run the machine again.</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_shutdown">Shut down</string>
+    <string name="placeholder_open_menu">Open the menu and start the machine</string>
+    <string name="placeholder_boot_wait">Screen %1$d×%2$d connected, waiting for the first frame</string>
+    <string name="placeholder_connecting">The machine is running, connecting to the screen…</string>
+    <string name="placeholder_failed">Screen unavailable: %1$s</string>
+    <string name="placeholder_stopped">The machine is stopped</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_screen">Screen</string>
+    <string name="settings_terminal">Terminal</string>
+    <string name="settings_terminal_follow">Follow the end</string>
+    <string name="settings_network">Network</string>
+    <string name="settings_machine">Machine</string>
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_apply_footer">Changes apply the next time the machine starts. Restart the app to start it again.</string>
+    <string name="settings_rounded_screen">Rounded corners</string>
+    <string name="settings_show_fps">Frame counter</string>
+    <string name="settings_smooth_upscale">Smooth when stretched</string>
+    <string name="settings_network_toggle">Internet over USB</string>
+    <string name="settings_network_autofix">Bring the interface up in the guest</string>
+    <string name="settings_cores">vCPUs</string>
+    <string name="settings_memory">Memory</string>
+    <string name="settings_tcg_threads">TCG threads</string>
+    <string name="settings_tb_size">Translation buffer</string>
+    <string name="settings_build">Build</string>
+    <string name="action_done">Done</string>
+</resources>
