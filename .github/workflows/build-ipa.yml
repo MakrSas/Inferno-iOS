@@ -1,8 +1,10 @@
 name: Build Inferno.ipa
 
 # Builds an unsigned Inferno.ipa on a GitHub runner, so nobody needs their own
-# Mac. The artifact is attached to every run; for a vX.Y tag it is also added
-# to the release.
+# Mac. The build is attached to the run as an artifact and nothing else: the
+# file published with a release is the one built and tested on a real phone,
+# and this workflow used to overwrite it. Tags are still built, so that a
+# release is never cut from a tree that does not compile.
 #
 # No guest image, firmware or Apple key is involved here — those are still
 # yours to build by ChefKiss's guide (see README).
@@ -24,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write   # only the release step needs this
+  contents: read
 
 jobs:
   build:
@@ -100,9 +102,3 @@ jobs:
           path: app/Inferno.ipa
           if-no-files-found: error
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: app/Inferno.ipa
-          fail_on_unmatched_files: true
