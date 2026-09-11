@@ -96,6 +96,12 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.material3)
+    // Most of the icons this app uses (NetworkCheck, Tune, PowerSettingsNew,
+    // FolderOpen...) live only in -extended, not the small curated -core
+    // set — pulling in every Material icon there is (many thousands of
+    // classes) as the price. With minification off, that dominates a debug
+    // build's dex size; a real release build (minifyEnabled = true) lets
+    // R8 tree-shake it down to just the icons actually referenced.
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.foundation)
     debugImplementation(libs.androidx.compose.ui.tooling)
