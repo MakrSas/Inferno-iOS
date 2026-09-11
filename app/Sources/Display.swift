@@ -199,6 +199,11 @@ final class EmbeddedDisplay: GuestDisplay {
 
         var counters: [UInt64] = [0, 0]
         counters.withUnsafeMutableBufferPointer { statsFn($0.baseAddress) }
+
+        // A second in which the machine showed nothing and nothing reached the
+        // screen says only that the guest was still. Printing that once a
+        // second buries everything else in the log, so it is left out.
+        guard counters[0] > 0 || tally.delivered > 0 else { return }
         let milliseconds = { (nanos: UInt64) in Double(nanos) / 1_000_000 / elapsed }
 
         LogCapture.shared.note(String(
