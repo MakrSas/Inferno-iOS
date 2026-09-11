@@ -11,7 +11,7 @@
 #
 # Versions are pinned to what sits in the author's working prefix:
 #   zlib 1.3.1, GMP 6.3.0, nettle 3.10.2 (+hogweed), libtasn1 4.20.0,
-#   libpng 1.6.44, pixman 0.44.2, glib 2.84.3 (with its own libffi/pcre2/libintl),
+#   libpng 1.6.58, pixman 0.44.2, glib 2.84.3 (with its own libffi/pcre2/libintl),
 #   libslirp 4.9.1, libucontext, lzfse.
 set -euo pipefail
 
@@ -122,7 +122,10 @@ untar libtasn1.tar.gz libtasn1
 conf_build libtasn1 --disable-doc
 
 # ── libpng ────────────────────────────────────────────────────────────────
-fetch "https://github.com/pnggroup/libpng/releases/download/v1.6.44/libpng-1.6.44.tar.gz" libpng.tar.gz
+# The 1.6.44 release asset used to live here; pnggroup prunes old release
+# binaries, and it 404s now. The tag archive stays available indefinitely
+# and already ships a pre-generated configure, so nothing else changes.
+fetch "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz" libpng.tar.gz
 untar libpng.tar.gz libpng
 conf_build libpng --disable-tools
 
