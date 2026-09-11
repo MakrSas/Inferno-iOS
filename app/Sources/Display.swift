@@ -52,6 +52,9 @@ final class EmbeddedDisplay: GuestDisplay {
     private typealias ReadFn = @convention(c) (UnsafeMutableRawPointer?, Int, UnsafeMutablePointer<UInt32>?) -> Int32
     private typealias TouchFn = @convention(c) (Int32, Int32, Bool) -> Void
     private typealias KeyFn = @convention(c) (UInt32, Bool) -> Void
+    /// Fills two counters: frames the machine showed, and refreshes the main
+    /// loop got round to. Missing from older builds of the library.
+    private typealias StatsFn = @convention(c) (UnsafeMutablePointer<UInt64>?) -> Void
 
     /// Matches InfernoFrameResult in ui/inferno-embed.h.
     private enum Result: Int32 {
@@ -77,6 +80,7 @@ final class EmbeddedDisplay: GuestDisplay {
     private let read: ReadFn
     private let touchFn: TouchFn
     private let keyFn: KeyFn
+    private let statsFn: StatsFn?
 
     private var thread: Thread?
     private var running = false
@@ -95,6 +99,7 @@ final class EmbeddedDisplay: GuestDisplay {
         self.read = unsafeBitCast(read, to: ReadFn.self)
         self.touchFn = unsafeBitCast(touch, to: TouchFn.self)
         self.keyFn = unsafeBitCast(key, to: KeyFn.self)
+        self.statsFn = bridge.symbol("inferno_display_stats").map { unsafeBitCast($0, to: StatsFn.self) }
     }
 
     deinit {
@@ -140,9 +145,15 @@ final class EmbeddedDisplay: GuestDisplay {
         info.initialize(repeating: 0, count: Field.count)
         defer { info.deallocate() }
 
+        var tally = Tally()
+
         while running {
+            let beforeRead = DispatchTime.now().uptimeNanoseconds
             let outcome = Result(rawValue: read(buffers.isEmpty ? nil : buffers[current],
                                                 bufferBytes, info)) ?? .none
+            let afterRead = DispatchTime.now().uptimeNanoseconds
+            tally.readNanos += afterRead - beforeRead
+
             switch outcome {
             case .resize:
                 resize(width: Int(info[Field.width]), height: Int(info[Field.height]))
@@ -152,11 +163,48 @@ final class EmbeddedDisplay: GuestDisplay {
                        stride: Int(info[Field.stride]))
                 publish()
                 current = (current + 1) % EmbeddedDisplay.bufferCount
+                tally.delivered += 1
             case .none:
-                break
+                tally.idle += 1
             }
+            tally.handNanos += DispatchTime.now().uptimeNanoseconds - afterRead
+            report(&tally)
             Thread.sleep(forTimeInterval: 1.0 / 60)
         }
+    }
+
+    /// What the last second of the loop looked like.
+    private struct Tally {
+        var delivered = 0
+        var idle = 0
+        var readNanos: UInt64 = 0
+        var handNanos: UInt64 = 0
+        var since = DispatchTime.now().uptimeNanoseconds
+    }
+
+    /// Says once a second where the frames went.
+    ///
+    /// The frame counter under the screen only ever knew about the frames that
+    /// arrived; it could not tell a guest drawing ten times a second from a
+    /// guest drawing forty and losing thirty on the way. These three numbers
+    /// can: what the machine showed, what reached the screen, and how often
+    /// QEMU's main loop — the thing that competes with the vCPUs for the big
+    /// lock — got round to asking for a redraw at all.
+    private func report(_ tally: inout Tally) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let elapsed = Double(now - tally.since) / 1_000_000_000
+        guard elapsed >= 1 else { return }
+        defer { tally = Tally() }
+        guard Settings.shared.showFPS, let statsFn else { return }
+
+        var counters: [UInt64] = [0, 0]
+        counters.withUnsafeMutableBufferPointer { statsFn($0.baseAddress) }
+        let milliseconds = { (nanos: UInt64) in Double(nanos) / 1_000_000 / elapsed }
+
+        LogCapture.shared.note(String(
+            format: "Кадры: гость показал %.0f/с, дошло %.0f/с, вхолостую %.0f/с; главный цикл %.0f/с; чтение %.0f мс/с, выдача %.0f мс/с",
+            Double(counters[0]) / elapsed, Double(tally.delivered) / elapsed, Double(tally.idle) / elapsed,
+            Double(counters[1]) / elapsed, milliseconds(tally.readNanos), milliseconds(tally.handNanos)))
     }
 
     private func resize(width: Int, height: Int) {

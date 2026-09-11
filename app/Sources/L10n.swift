@@ -109,6 +109,17 @@ enum L10n {
         "Вид": "View",
         "Сеть: консоль занята, попрошу позже.": "Network: the console is busy, will ask later.",
         "Счётчик кадров": "Frame counter",
+        "Панель": "Panel",
+        "Звук": "Sound",
+        "Звук гостя (опыт)": "The guest's sound (experimental)",
+        "Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Услышать пока нечего: в эмулируемой машине не хватает звукового сопроцессора, через который iOS выводит на динамик, — поэтому гость в эту дорожку ничего не шлёт. Тумблер есть, чтобы проверять сторону телефона, пока делается сторона машины. Применяется при запуске машины.":
+            "Sound output on the phone: its own path through an audio unit, which neither silences whatever else is playing nor spoils the Bluetooth headset profile. There is nothing to hear yet: the emulated machine is missing the audio coprocessor iOS drives the speaker through, so the guest sends nothing down this path. The switch is here to test the phone's half while the machine's half is built. Applied when the machine starts.",
+        "Здесь лежит весь код гостя, переведённый в код телефона. Когда он не помещается, буфер сбрасывается целиком и ядра переводят всё заново вместо того, чтобы исполнять. Замерено на телефоне: при 64 МБ гость выдавал 8–11 кадров в секунду, при 256 — 21–25, причём на большей панели. Большее не бесплатно: буфер живёт в тех же трёх гигабайтах, что и память гостя. Если приложение перестанет запускаться — верните шаг назад.":
+            "This holds all of the guest's code, translated into the phone's. When it does not fit, the buffer is thrown away whole and the cores translate everything again instead of running it. Measured on the phone: at 64 MB the guest managed 8–11 frames a second, at 256 it managed 21–25, and on a larger panel at that. More is not free: the buffer lives in the same three gigabytes as the guest's memory. If the app stops starting, step back down.",
+        "Размер": "Size",
+        "%d×%d, точек %d×%d": "%d×%d, %d×%d points",
+        "Экран гостя рисуется без графического ускорителя — каждый кадр собирают эмулируемые ядра, и платят они за каждый пиксель. Панель поменьше — меньше работы: у iPhone 8 пикселей на треть меньше, чем у iPhone 11, у SE — вдвое. Чёткость при этом не страдает: масштаб везде двукратный, ресурсы iOS берёт те же, интерфейс просто становится интерфейсом телефона поменьше. Применяется при запуске машины.":
+            "The guest's screen is drawn with no graphics accelerator — the emulated cores assemble every frame, and they pay for every pixel. A smaller panel is less work: the iPhone 8 has a third fewer pixels than the iPhone 11, the SE half as many. Sharpness does not suffer: the scale stays at two everywhere, iOS uses the same artwork, and the interface simply becomes that of a smaller phone. Applied when the machine starts.",
         "Ядрам гостя — быстрые ядра телефона": "Fast phone cores for the guest's cores",
         "Потоки эмулируемых ядер просят у iOS высший класс обслуживания. Без этого они получают обычный, и телефон вправе увести их на энергоэффективные ядра. Применяется при запуске машины.":
             "The threads running the emulated cores ask iOS for the highest quality of service. Without it they get the default one, and the phone is free to move them to the efficiency cores. Applied when the machine starts.",

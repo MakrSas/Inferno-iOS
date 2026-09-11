@@ -29,6 +29,9 @@ struct VMConfig {
     /// framebuffer and dropping the scale to one keeps the same interface over
     /// a quarter of the pixels, and the app scales the picture back up so it
     /// covers the same area of the screen.
+    /// Whether the machine is given a way to be heard. The emulated sound card
+    /// exists either way; this decides whether anything is on the other end.
+    var audio: Bool = false
     var displayWidth: Int = 828
     var displayHeight: Int = 1792
     var displayScale: Int = 2
@@ -164,6 +167,12 @@ struct VMConfig {
             "-drive", "file=\(data)/sep_nvram,if=pflash,format=raw",
             "-drive", "file=\(data)/sep_ssc,if=pflash,format=raw",
         ]
+
+        if !audio {
+            // Silence is asked for explicitly: with no audiodev named, the
+            // machine's sound card takes the first output the build offers.
+            argv += ["-audiodev", "none,id=quiet"]
+        }
 
         if headless || builtInDisplay {
             // Nothing for the emulator to serve: either there is no screen at

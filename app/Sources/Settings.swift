@@ -21,6 +21,11 @@ final class Settings: ObservableObject {
     @AppStorage("tcgThreads") var tcgThreads: String = "multi" {
         willSet { objectWillChange.send() }
     }
+    /// Left at the middle of the range on purpose. Bigger is faster — measured
+    /// on the phone, 64 MB gave 8–11 frames a second and 256 gave 21–25 — but
+    /// this buffer shares the process's three gigabytes with the guest's own
+    /// memory, and a default that wins frames by courting the memory limit is
+    /// not a default. Raising it is one tap away, in Settings → Translator.
     @AppStorage("tbSize") var tbSize: Int = 128 {
         willSet { objectWillChange.send() }
     }
@@ -34,6 +39,14 @@ final class Settings: ObservableObject {
         willSet { objectWillChange.send() }
     }
     @AppStorage("builtInDisplay") var builtInDisplay: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("panel") var panel: String = GuestPanel.iphone11.rawValue {
+        willSet { objectWillChange.send() }
+    }
+    /// Whether the guest's sound reaches the phone's speaker. Off by default:
+    /// the samples are prepared by the same emulated cores that draw the screen.
+    @AppStorage("guestAudio") var guestAudio: Bool = false {
         willSet { objectWillChange.send() }
     }
     @AppStorage("smoothUpscale") var smoothUpscale: Bool = true {
@@ -83,6 +96,11 @@ final class Settings: ObservableObject {
         c.network = network
         c.headless = headless
         c.builtInDisplay = builtInDisplay
+        c.audio = guestAudio
+        let pixels = (GuestPanel(rawValue: panel) ?? .iphone11).pixels
+        c.displayWidth = pixels.width
+        c.displayHeight = pixels.height
+        c.displayScale = pixels.scale
         return c
     }
 }
@@ -95,6 +113,53 @@ final class Settings: ObservableObject {
 /// given a different panel.
 enum GuestBezel {
     static let radiusOverWidth: CGFloat = 41.5 / 414
+}
+
+/// The panel the machine shows the guest.
+///
+/// Pixels are what the emulated cores pay for. There is no GPU in the guest, so
+/// iOS composites every frame in software on those cores, and the same pixels
+/// are then read out of the machine's memory and carried to the screen. A
+/// smaller panel is less of all of it.
+///
+/// The scale stays at two throughout. It is tempting to drop it to one and take
+/// four times fewer pixels, but then iOS is no longer drawing Retina: it falls
+/// back to @1x artwork, which modern iOS barely ships, and the interface comes
+/// out wrong rather than small. A smaller panel at scale two is a smaller
+/// phone, drawn exactly as sharply as before.
+/// Every width here is a multiple of four, so that a row of the frame is a
+/// multiple of sixteen bytes. It is not a preference: at 750 pixels wide the
+/// guest does not finish booting at all.
+enum GuestPanel: String, CaseIterable {
+    case iphone11
+    case iphone8
+    case iphoneSE
+
+    var pixels: (width: Int, height: Int, scale: Int) {
+        switch self {
+        case .iphone11: return (828, 1792, 2)
+        // Not the iPhone 8's own 750×1334: a frame row has to be a multiple of
+        // sixteen bytes, and 750×4 is 3000, which is not. Two pixels wider and
+        // the row is 3008, which is. The guest hangs on boot otherwise — the
+        // machine wedges with the main loop never getting a redraw in.
+        case .iphone8: return (752, 1336, 2)
+        case .iphoneSE: return (640, 1136, 2)
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .iphone11: return L("iPhone 11")
+        case .iphone8: return L("iPhone 8")
+        case .iphoneSE: return L("iPhone SE")
+        }
+    }
+
+    /// What it costs, for the line under the picker.
+    var detail: String {
+        let p = pixels
+        return L("%d×%d, точек %d×%d", p.width, p.height, p.width / p.scale, p.height / p.scale)
+    }
 }
 
 struct SettingsView: View {
@@ -164,6 +229,20 @@ private struct ScreenSettings: View {
 
     var body: some View {
         Form {
+            Section {
+                Picker(L("Панель"), selection: $settings.panel) {
+                    ForEach(GuestPanel.allCases, id: \.rawValue) { panel in
+                        Text(panel.title).tag(panel.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                LabeledContent(L("Размер"),
+                               value: (GuestPanel(rawValue: settings.panel) ?? .iphone11).detail)
+                    .font(.footnote)
+            } footer: {
+                Text(L("Экран гостя рисуется без графического ускорителя — каждый кадр собирают эмулируемые ядра, и платят они за каждый пиксель. Панель поменьше — меньше работы: у iPhone 8 пикселей на треть меньше, чем у iPhone 11, у SE — вдвое. Чёткость при этом не страдает: масштаб везде двукратный, ресурсы iOS берёт те же, интерфейс просто становится интерфейсом телефона поменьше. Применяется при запуске машины."))
+            }
+
             Section {
                 Toggle(L("Без экрана"), isOn: $settings.headless)
             } footer: {
@@ -291,6 +370,14 @@ private struct MachineSettings: View {
             } footer: {
                 Text(L("Потолок процесса на iPhone — ровно 3 ГиБ, и в него входит всё остальное, что держит приложение."))
             }
+
+            Section {
+                Toggle(L("Звук гостя (опыт)"), isOn: $settings.guestAudio)
+            } header: {
+                Text(L("Звук"))
+            } footer: {
+                Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Услышать пока нечего: в эмулируемой машине не хватает звукового сопроцессора, через который iOS выводит на динамик, — поэтому гость в эту дорожку ничего не шлёт. Тумблер есть, чтобы проверять сторону телефона, пока делается сторона машины. Применяется при запуске машины."))
+            }
         }
         .navigationTitle(L("Машина"))
         .navigationBarTitleDisplayMode(.inline)
@@ -314,8 +401,10 @@ private struct TranslatorSettings: View {
 
             Section {
                 Picker(L("Буфер трансляций"), selection: $settings.tbSize) {
-                    ForEach([32, 64, 128, 256], id: \.self) { Text(L("%d МБ", $0)).tag($0) }
+                    ForEach([32, 64, 128, 256, 384, 512], id: \.self) { Text(L("%d МБ", $0)).tag($0) }
                 }
+            } footer: {
+                Text(L("Здесь лежит весь код гостя, переведённый в код телефона. Когда он не помещается, буфер сбрасывается целиком и ядра переводят всё заново вместо того, чтобы исполнять. Замерено на телефоне: при 64 МБ гость выдавал 8–11 кадров в секунду, при 256 — 21–25, причём на большей панели. Большее не бесплатно: буфер живёт в тех же трёх гигабайтах, что и память гостя. Если приложение перестанет запускаться — верните шаг назад."))
             }
         }
         .navigationTitle(L("Транслятор"))
