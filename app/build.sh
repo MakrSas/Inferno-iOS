@@ -5,6 +5,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/.build"
+# Собранный вручную .ipa кладётся в корень проекта: туда за ним приходят руками,
+# и это правило проекта (CLAUDE.md).
+#
+# В CI путь остаётся прежним. Рабочий процесс забирает артефакт из app/ и падает,
+# если файла там нет, — ломать его ради местного удобства незачем.
+PROJECT="$(cd "$ROOT/.." && pwd)"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    IPA="$ROOT/Inferno.ipa"
+else
+    IPA="$PROJECT/Inferno.ipa"
+fi
 # Ищем библиотеку эмулятора там, где она обычно и лежит: сначала рядом с
 # репозиторием, как описано в README, потом в дереве сборки. Переопределяется
 # переменной INFERNO_DYLIB.
@@ -129,9 +140,9 @@ echo "==> Упаковка"
 cd "$BUILD"
 # zip adds to an existing archive instead of replacing it, which would carry
 # files from an earlier build into this one.
-rm -f "$ROOT/Inferno.ipa"
-zip -qry "$ROOT/Inferno.ipa" Payload -x '*.DS_Store'
+rm -f "$IPA"
+zip -qry "$IPA" Payload -x '*.DS_Store'
 
 echo
-echo "Готово: $ROOT/Inferno.ipa"
-ls -lh "$ROOT/Inferno.ipa"
+echo "Готово: $IPA"
+ls -lh "$IPA"
