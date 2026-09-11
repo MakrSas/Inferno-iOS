@@ -33,10 +33,17 @@ do {
             .install(ipa: ipa, progress: { _, _ in }, note: { print("   \($0)") })
         print(String(format: "УСТАНОВЛЕНО: %@ за %.1f с", target, Date().timeIntervalSince(t0)))
     } else {
-        // Туда и обратно, со сверкой.
-        let size = 5 * 1024 * 1024
+        // Туда и обратно, со сверкой. Размер задаётся в мегабайтах: больше
+        // окна носителя — значит передача пойдёт несколькими окнами, а это
+        // отдельный путь в коде.
+        let megabytes = CommandLine.arguments.count > 2 ? Int(CommandLine.arguments[2]) ?? 5 : 5
+        let size = megabytes * 1024 * 1024
         let local = FileManager.default.temporaryDirectory.appendingPathComponent("xfer-test.bin")
-        try Data((0..<size).map { _ in UInt8.random(in: 0...255) }).write(to: local)
+        // Из /dev/urandom, а не поэлементно: на десятках мегабайт map по
+        // одному байту мерил бы скорость Swift, а не канала.
+        let random = FileHandle(forReadingAtPath: "/dev/urandom")!
+        try (random.read(upToCount: size) ?? Data()).write(to: local)
+        try? random.close()
         let want = crc(local)
         let remote = "/var/mobile/.inferno/test.bin"
 

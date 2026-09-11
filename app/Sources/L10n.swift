@@ -315,6 +315,8 @@ enum L10n {
         "гость не прочитал носитель (%d)": "the guest did not read the namespace (%d)",
         "гость не записал носитель (%d)": "the guest did not write the namespace (%d)",
         "в госте %@ Б, у нас %d Б": "%@ bytes in the guest, %d here",
+        "Приложению нужна iOS %d, а в госте iOS %d — оно встало, но не запустится.":
+            "The app needs iOS %d and the guest is iOS %d — it is installed, but will not launch.",
     ]
 
     static func string(_ russian: String) -> String {

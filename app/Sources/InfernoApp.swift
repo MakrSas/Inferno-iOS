@@ -364,9 +364,12 @@ final class VMModel: ObservableObject {
                     }
                 })
                 let summary = TransferState.summary(url: url, seconds: Date().timeIntervalSince(started))
+                // A warning is not a failure: the app is installed either way,
+                // and saying why it will not start beats letting it look broken.
+                let caveat = installer.warning.map { "\n" + $0 } ?? ""
                 DispatchQueue.main.async {
-                    self.transfer = .finished(L("Установлено: %@", target) + "\n" + summary)
-                    LogCapture.shared.note("Установка: \(name) → \(target), \(summary)")
+                    self.transfer = .finished(L("Установлено: %@", target) + "\n" + summary + caveat)
+                    LogCapture.shared.note("Установка: \(name) → \(target), \(summary)\(caveat)")
                 }
             } catch {
                 DispatchQueue.main.async {

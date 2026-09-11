@@ -34,6 +34,12 @@ final class GuestInstaller {
     private let serial: SerialConsole
     private let files: GuestFiles
 
+    /// Set when the app went in but the guest is too old to run it. Not an
+    /// error: the files are installed and SpringBoard knows about them, it
+    /// simply will not launch an app built for a newer iOS. Worth saying out
+    /// loud, because otherwise it looks like the installer failed.
+    private(set) var warning: String?
+
     init(serial: SerialConsole, files: GuestFiles) {
         self.serial = serial
         self.files = files
@@ -67,6 +73,7 @@ final class GuestInstaller {
         defer { try? FileManager.default.removeItem(at: scratch) }
         try Archive.writeTar(staged, to: scratch)
 
+        let wanted = minimumOS(of: entries, app: appName)
         let target = "/Applications/" + appName
         return try serial.exclusive {
             let shell = GuestShell(serial: serial)
@@ -76,8 +83,36 @@ final class GuestInstaller {
             try files.carry(scratch, to: Self.stagedTar, shell: shell,
                             progress: progress, note: note)
             try unpack(shell, target: target, note: note)
+            checkAge(shell, wanted: wanted, note: note)
             return target
         }
+    }
+
+    /// What the app says it needs, out of its own Info.plist.
+    private func minimumOS(of entries: [Archive.Entry], app: String) -> Int? {
+        guard let plist = entries.first(where: { $0.path == "Payload/\(app)/Info.plist" }),
+              let parsed = try? PropertyListSerialization.propertyList(
+                  from: plist.data, options: [], format: nil) as? [String: Any],
+              let version = parsed["MinimumOSVersion"] as? String,
+              let major = Int(version.split(separator: ".").first.map(String.init) ?? "")
+        else { return nil }
+        return major
+    }
+
+    /// Compares it with the guest's own iOS. The version is taken from the
+    /// kernel rather than a plist: `uname -r` is on every image and needs no
+    /// parser, and Darwin's major number runs exactly six ahead of iOS's.
+    private func checkAge(_ shell: GuestShell, wanted: Int?, note: @escaping (String) -> Void) {
+        guard let wanted else { return }
+        guard let release = shell.text("uname -r"),
+              let darwin = Int(release.split(separator: ".").first.map(String.init) ?? ""),
+              darwin > 6
+        else { return }
+        let guestOS = darwin - 6
+        guard wanted > guestOS else { return }
+        warning = L("Приложению нужна iOS %d, а в госте iOS %d — оно встало, но не запустится.",
+                    wanted, guestOS)
+        note(warning!)
     }
 
     // MARK: - Putting it in place
