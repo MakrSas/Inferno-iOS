@@ -81,6 +81,13 @@ final class GuestFiles {
     func carry(_ file: URL, to remote: String, shell: GuestShell,
                progress: @escaping (Int64, Int64) -> Void,
                note: @escaping (String) -> Void) throws {
+        // The folder has to exist before anything is poured into it. When it did
+        // not, the guest's `cat` failed on opening the file and closed the
+        // socket, and this end saw only "Broken pipe" — a true statement about
+        // the socket that says nothing about the cause. One short command costs
+        // nothing and removes the whole class of confusion.
+        _ = shell.run("mkdir -p \"$(dirname \(remote))\"")
+
         if let fast = fastChannel(shell, note: note) {
             note(L("Канал: NVMe, %@.", fast.device))
             try fast.send(file, to: remote, shell: shell, progress: progress)
