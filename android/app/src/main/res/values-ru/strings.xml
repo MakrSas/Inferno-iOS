@@ -6,6 +6,7 @@
     <string name="setup_title">Не хватает файлов</string>
     <string name="setup_instructions">Выберите папку InfernoData и файл AppleSEPROM-Cebu-B1 — приложение скопирует их в своё хранилище.</string>
     <string name="setup_pick_folder">Выбрать InfernoData…</string>
+    <string name="setup_disk_note">Всё, кроме самого диска, копируется в приложение. Диск остаётся на месте и открывается прямо из выбранной папки при запуске машины — не переносите и не удаляйте его оттуда.</string>
     <string name="setup_pick_seprom">Выбрать AppleSEPROM-Cebu-B1…</string>
     <string name="setup_missing_header">Не хватает</string>
     <string name="setup_recheck">Проверить снова</string>

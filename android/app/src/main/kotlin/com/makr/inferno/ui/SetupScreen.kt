@@ -44,6 +44,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.makr.inferno.R
+import com.makr.inferno.vm.GuestUriStore
 import com.makr.inferno.vm.VMConfig
 import com.makr.inferno.vm.VMModel
 import kotlinx.coroutines.Dispatchers
@@ -70,6 +71,7 @@ fun SetupScreen(model: VMModel) {
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         val tree = DocumentFile.fromTreeUri(context, uri) ?: return@rememberLauncherForActivityResult
+        GuestUriStore.setTree(context, uri)
         scope.launch {
             copying = tree.name ?: "InfernoData"
             withContext(Dispatchers.IO) {
@@ -134,6 +136,11 @@ fun SetupScreen(model: VMModel) {
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.setup_pick_seprom))
                 }
+                Text(
+                    text = stringResource(R.string.setup_disk_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             Text(
@@ -167,12 +174,26 @@ fun SetupScreen(model: VMModel) {
     }
 }
 
-/** Recursively copies a picked SAF tree into `destination`, preserving the
- *  relative layout the guest images ship in (InfernoData/Restore/...). */
+/** Never copied under either of its two names — see `copyTreeInto` below. */
+private val ROOT_DISK_NAMES = setOf("root", "root.qcow2")
+
+/**
+ * Recursively copies a picked SAF tree into `destination`, preserving the
+ * relative layout the guest images ship in (InfernoData/Restore/...) —
+ * except the disk itself. That one file is tens of gigabytes nominal and
+ * single-digit gigabytes real, on a phone where free space is often the
+ * tight side of the equation; duplicating it into app-private storage on
+ * top of what's already sitting in the picked folder would be the single
+ * most wasteful thing this screen could do. GuestUriStore remembers the
+ * picked tree instead, and VMConfig.resolveRootImage opens the disk
+ * straight out of it (via a `/proc/self/fd/N` path) when the machine
+ * actually starts — see the comment there for the rest of that story.
+ */
 private fun copyTreeInto(context: Context, source: DocumentFile, destination: File) {
     destination.mkdirs()
     for (child in source.listFiles()) {
         val name = child.name ?: continue
+        if (!child.isDirectory && name in ROOT_DISK_NAMES) continue
         val target = File(destination, name)
         if (child.isDirectory) {
             copyTreeInto(context, child, target)

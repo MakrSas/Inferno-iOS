@@ -2,6 +2,7 @@ package com.makr.inferno.vm
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -74,6 +75,11 @@ class VMModel(application: Application) : AndroidViewModel(application) {
 
     private var networkWatch: Job? = null
 
+    /** Held for as long as the machine might still be opening the root
+     *  disk — see VMConfig.ResolvedRoot. Closed once QEMU has its own
+     *  handle (in practice, for the whole run, to not race that moment). */
+    private var rootDescriptor: ParcelFileDescriptor? = null
+
     fun refreshFiles() {
         missing = VMConfig.missingFiles(getApplication())
     }
@@ -95,6 +101,19 @@ class VMModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Resolved here rather than inside VMConfig.arguments() because a
+        // SAF-backed disk comes with a live ParcelFileDescriptor this model
+        // has to keep open for the run — VMConfig only knows the path
+        // string (/proc/self/fd/N) that descriptor makes valid.
+        val resolvedRoot = VMConfig.resolveRootImage(getApplication())
+        if (resolvedRoot == null) {
+            lastError = "Диск устройства недоступен — выберите папку InfernoData заново"
+            qemuState = QemuBridge.State.FAILED
+            return
+        }
+        rootDescriptor?.close()
+        rootDescriptor = resolvedRoot.descriptor
+
         QemuBridge.onStateChange = { status ->
             qemuState = status.state
             if (status.state == QemuBridge.State.RUNNING) {
@@ -107,7 +126,7 @@ class VMModel(application: Application) : AndroidViewModel(application) {
 
         hasRun = true
         val config = settings.value.toVMConfig()
-        val args = config.arguments(getApplication(), libraryPath)
+        val args = config.arguments(getApplication(), libraryPath, resolvedRoot.image)
         if (!QemuBridge.nativeStart(args.toTypedArray())) {
             lastError = "Не удалось запустить поток эмулятора"
             qemuState = QemuBridge.State.FAILED
@@ -135,7 +154,17 @@ class VMModel(application: Application) : AndroidViewModel(application) {
             QMPClient.quit(config.qmpPort)
             display.disconnect()
             networkWatch?.cancel()
+            rootDescriptor?.close()
+            rootDescriptor = null
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // Belt and braces: shutdown() is the normal path, but the process
+        // can go away without it running at all.
+        rootDescriptor?.close()
+        rootDescriptor = null
     }
 
     // MARK: Network

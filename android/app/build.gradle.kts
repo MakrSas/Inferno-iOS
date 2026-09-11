@@ -65,11 +65,16 @@ android {
     }
 
     packaging {
-        // The emulator library (once dropped into jniLibs, see
-        // ANDROID-PORT.md) ships uncompressed: QEMU dlopens nothing from it,
-        // but the loader maps it directly, and a compressed .so cannot be
-        // mapped that way.
-        jniLibs.useLegacyPackaging = false
+        // true (the old behaviour) on purpose, against AGP's own default:
+        // with libs stored uncompressed and mmap'd straight out of the APK
+        // (useLegacyPackaging = false, AGP's default past API 23),
+        // applicationInfo.nativeLibraryDir names a directory nothing is
+        // ever actually extracted into — the linker maps the library via a
+        // "base.apk!/lib/..." path instead, which only System.loadLibrary()
+        // (through the ClassLoader) knows how to build. QemuBridge dlopens
+        // by a plain path it constructs itself (see VMModel.defaultLibraryPath),
+        // so it needs a real extracted file at that path, not a virtual one.
+        jniLibs.useLegacyPackaging = true
     }
 }
 

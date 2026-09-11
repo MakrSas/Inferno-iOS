@@ -1,6 +1,7 @@
 package com.makr.inferno.vm
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import java.io.File
 
 /**
@@ -79,10 +80,17 @@ data class VMConfig(
 
         data class RootImage(val path: String, val format: String)
 
-        /** qcow2 preferred, same reasoning as iOS: the raw image is tens of
-         *  gigabytes of mostly holes, and most ways of copying it onto a
-         *  phone fill them in. */
-        fun rootImage(context: Context): RootImage? {
+        /** [image] is what goes on the `-drive file=...` line; [descriptor],
+         *  when present, is the open SAF handle backing a `/proc/self/fd/N`
+         *  path in it and must be kept alive (not garbage-collected, not
+         *  closed) until the machine has actually opened the file — see
+         *  VMModel, which holds it for the machine's whole run to be safe. */
+        data class ResolvedRoot(val image: RootImage, val descriptor: ParcelFileDescriptor?)
+
+        /** The copied-in disk, if there is one. qcow2 preferred, same
+         *  reasoning as iOS: the raw image is tens of gigabytes of mostly
+         *  holes, and most ways of copying it onto a phone fill them in. */
+        fun localRootImage(context: Context): RootImage? {
             val dir = dataDirectory(context)
             val qcow = File(dir, "root.qcow2")
             if (qcow.exists()) return RootImage(qcow.path, "qcow2")
@@ -91,20 +99,44 @@ data class VMConfig(
             return null
         }
 
+        fun hasRootImage(context: Context): Boolean =
+            localRootImage(context) != null || GuestUriStore.rootDocument(context) != null
+
+        /**
+         * The disk itself is the one file SetupScreen doesn't copy (see its
+         * own comment on why) — this is where that trade-off is paid back.
+         * A local copy under `InfernoData/` wins if one exists (someone put
+         * it there by hand, or a future version copies it after all); failing
+         * that, it's opened straight out of the SAF tree the user picked, and
+         * the returned descriptor is what keeps that "file" behind
+         * `/proc/self/fd/N` valid — bionic's dlopen and QEMU's own `open()`
+         * both resolve that path like any other, on any Android version this
+         * app supports.
+         */
+        fun resolveRootImage(context: Context): ResolvedRoot? {
+            localRootImage(context)?.let { return ResolvedRoot(it, null) }
+            val doc = GuestUriStore.rootDocument(context) ?: return null
+            val name = doc.name ?: return null
+            val format = if (name.endsWith(".qcow2")) "qcow2" else "raw"
+            val pfd = runCatching { context.contentResolver.openFileDescriptor(doc.uri, "rw") }
+                .getOrNull() ?: return null
+            return ResolvedRoot(RootImage("/proc/self/fd/${pfd.fd}", format), pfd)
+        }
+
         fun missingFiles(context: Context): List<String> {
             val root = guestFilesRoot(context)
             val missing = requiredFiles
                 .filterNot { File(root, it.relativePath).exists() }
                 .map { it.label }
                 .toMutableList()
-            if (rootImage(context) == null) {
+            if (!hasRootImage(context)) {
                 missing.add(0, "Диск устройства (root.qcow2 или root)")
             }
             return missing
         }
     }
 
-    fun arguments(context: Context, libraryPath: String): List<String> {
+    fun arguments(context: Context, libraryPath: String, root: RootImage?): List<String> {
         val data = dataDirectory(context).path
         val sep = sepROM(context).path
         val usbSocket = File(socketDirectory(context), USB_SOCKET_NAME).path
@@ -155,8 +187,8 @@ data class VMConfig(
             "-display", "none",
         )
 
-        rootImage(context)?.let { root ->
-            argv += listOf("-drive", "file=${root.path},format=${root.format},if=none,id=root")
+        root?.let { image ->
+            argv += listOf("-drive", "file=${image.path},format=${image.format},if=none,id=root")
             argv += listOf(
                 "-device",
                 "nvme-ns,drive=root,bus=nvme-bus.0,nsid=1,nstype=1,logical_block_size=4096,physical_block_size=4096",

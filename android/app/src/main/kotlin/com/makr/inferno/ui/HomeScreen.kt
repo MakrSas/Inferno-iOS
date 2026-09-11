@@ -2,11 +2,13 @@
 
 package com.makr.inferno.ui
 
+import android.content.Context
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,9 +18,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.OpenInFull
@@ -67,6 +73,7 @@ import com.makr.inferno.bridge.QemuBridge
 import com.makr.inferno.vm.HardwareButton
 import com.makr.inferno.vm.VMModel
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private enum class Pane { SCREEN, TERMINAL }
 
@@ -91,17 +98,19 @@ fun HomeScreen(model: VMModel, libraryPath: String, onOpenSettings: () -> Unit) 
                 Icon(Icons.Filled.OpenInFull, contentDescription = "Exit full screen")
             }
         } else {
-            FloatingActionButton(
-                onClick = { sheetOpen = true },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-            ) {
-                Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.menu_machine))
-            }
+            DraggableMenuButton(onClick = { sheetOpen = true })
         }
     }
 
     if (sheetOpen) {
-        ModalBottomSheet(onDismissRequest = { sheetOpen = false }, sheetState = rememberModalBottomSheetState()) {
+        ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = rememberModalBottomSheetState(),
+            // Explicit rather than relying on the theme default — this is
+            // the one surface in the app that's supposed to read as a
+            // rounded sheet sitting over the guest's picture.
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        ) {
             ControlSheetContent(
                 model = model,
                 pane = pane,
@@ -128,6 +137,66 @@ fun HomeScreen(model: VMModel, libraryPath: String, onOpenSettings: () -> Unit) 
                 TextButton(onClick = { confirmShutdown = false }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
+    }
+}
+
+private const val MENU_BUTTON_PREFS = "inferno_ui"
+
+/**
+ * The one control on screen while the guest is showing — draggable and
+ * sticky, same as ControlMenu on iOS (`@AppStorage("menuX")`/`"menuY"`
+ * there; a plain SharedPreferences pair here, for the same reason: it only
+ * needs to survive a relaunch, not sync or query). Position is kept as a
+ * fraction of the screen so it stays put across rotation and across
+ * devices, and a negative value means "never moved" — rest in the default
+ * bottom-trailing corner.
+ */
+@Composable
+private fun DraggableMenuButton(onClick: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(MENU_BUTTON_PREFS, Context.MODE_PRIVATE) }
+    var fx by remember { mutableStateOf(prefs.getFloat("menuX", -1f)) }
+    var fy by remember { mutableStateOf(prefs.getFloat("menuY", -1f)) }
+    var drag by remember { mutableStateOf(Offset.Zero) }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val widthPx = with(density) { maxWidth.toPx() }
+        val heightPx = with(density) { maxHeight.toPx() }
+        // Only far enough from the edge not to hang off it, same margin
+        // iOS's menuPoint(in:) uses.
+        val half = with(density) { (28.dp).toPx() } + with(density) { 6.dp.toPx() }
+        val edge = with(density) { 10.dp.toPx() }
+
+        val restingX = if (fx < 0f) widthPx - half - edge else fx * widthPx
+        val restingY = if (fy < 0f) heightPx - half - edge else fy * heightPx
+
+        val posX = (restingX + drag.x).coerceIn(half, widthPx - half)
+        val posY = (restingY + drag.y).coerceIn(half, heightPx - half)
+
+        FloatingActionButton(
+            onClick = onClick,
+            modifier = Modifier
+                .offset { IntOffset((posX - half).roundToInt(), (posY - half).roundToInt()) }
+                .pointerInput(widthPx, heightPx) {
+                    detectDragGestures(
+                        onDrag = { change, amount -> change.consume(); drag += amount },
+                        onDragEnd = {
+                            val landedX = (restingX + drag.x).coerceIn(half, widthPx - half)
+                            val landedY = (restingY + drag.y).coerceIn(half, heightPx - half)
+                            drag = Offset.Zero
+                            if (widthPx > 0f && heightPx > 0f) {
+                                fx = landedX / widthPx
+                                fy = landedY / heightPx
+                                prefs.edit().putFloat("menuX", fx).putFloat("menuY", fy).apply()
+                            }
+                        },
+                        onDragCancel = { drag = Offset.Zero },
+                    )
+                },
+        ) {
+            Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.menu_machine))
+        }
     }
 }
 
