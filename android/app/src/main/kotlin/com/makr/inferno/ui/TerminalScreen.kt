@@ -48,16 +48,32 @@ fun TerminalScreen(model: VMModel) {
 
     LaunchedEffect(Unit) {
         val file = VMConfig.guestConsoleLog(context)
-        var position = 0L
         val limit = 256 * 1024
+        // A guest that's been running a while can leave a console log
+        // hundreds of megabytes long (this one hit 459MB and OOM-crashed
+        // the app outright) — starting from byte 0 tries to read all of it
+        // in one ByteArray/String. Start near the end instead, like `tail`,
+        // and never read more than `limit` bytes in one pass even if the
+        // file grows faster than this polls.
+        var position = if (file.exists()) (file.length() - limit).coerceAtLeast(0) else 0L
         while (isActive) {
             if (file.exists() && file.length() > position) {
                 val chunk = withContext(Dispatchers.IO) {
                     RandomAccessFile(file, "r").use { raf ->
+                        // One length() snapshot for the whole pass — a live
+                        // guest keeps appending to this file, so calling
+                        // length() again after deciding how much to read
+                        // (as an earlier version of this did) could see a
+                        // larger number by the time it sized the ByteArray,
+                        // silently defeating the cap below and OOM-crashing
+                        // again exactly like the uncapped read this
+                        // replaced.
+                        val len = raf.length()
+                        if (len - position > limit) { position = len - limit }
                         raf.seek(position)
-                        val bytes = ByteArray((raf.length() - position).toInt())
+                        val bytes = ByteArray((len - position).toInt())
                         raf.readFully(bytes)
-                        position = raf.length()
+                        position = len
                         String(bytes, Charsets.UTF_8)
                     }
                 }

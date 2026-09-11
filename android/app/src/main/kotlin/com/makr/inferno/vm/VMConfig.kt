@@ -78,14 +78,20 @@ data class VMConfig(
             RequiredFile("SEP ROM", "AppleSEPROM-Cebu-B1"),
         )
 
-        data class RootImage(val path: String, val format: String)
+        /** [fds], when non-empty, means [path] is a `/dev/fdset/N` alias
+         *  rather than a real filesystem path, and [fds] are the raw
+         *  descriptor numbers `arguments()` must register with `-add-fd`
+         *  for that alias to resolve — see its comment for why the
+         *  SAF-backed case needs this instead of a plain path, and why more
+         *  than one fd is needed. */
+        data class RootImage(val path: String, val format: String, val fds: List<Int> = emptyList())
 
-        /** [image] is what goes on the `-drive file=...` line; [descriptor],
-         *  when present, is the open SAF handle backing a `/proc/self/fd/N`
-         *  path in it and must be kept alive (not garbage-collected, not
+        /** [image] is what goes on the `-drive file=...` line; [descriptors],
+         *  when non-empty, are the open SAF handles backing a `/dev/fdset/N`
+         *  alias in it and must be kept alive (not garbage-collected, not
          *  closed) until the machine has actually opened the file — see
-         *  VMModel, which holds it for the machine's whole run to be safe. */
-        data class ResolvedRoot(val image: RootImage, val descriptor: ParcelFileDescriptor?)
+         *  VMModel, which holds them for the machine's whole run to be safe. */
+        data class ResolvedRoot(val image: RootImage, val descriptors: List<ParcelFileDescriptor>)
 
         /** The copied-in disk, if there is one. qcow2 preferred, same
          *  reasoning as iOS: the raw image is tens of gigabytes of mostly
@@ -102,25 +108,52 @@ data class VMConfig(
         fun hasRootImage(context: Context): Boolean =
             localRootImage(context) != null || GuestUriStore.rootDocument(context) != null
 
+        /** Arbitrary but fixed — there is only ever one `-add-fd`-registered
+         *  drive, so nothing else can collide with this set id. */
+        private const val ROOT_FD_SET = 9
+
         /**
          * The disk itself is the one file SetupScreen doesn't copy (see its
          * own comment on why) — this is where that trade-off is paid back.
          * A local copy under `InfernoData/` wins if one exists (someone put
-         * it there by hand, or a future version copies it after all); failing
-         * that, it's opened straight out of the SAF tree the user picked, and
-         * the returned descriptor is what keeps that "file" behind
-         * `/proc/self/fd/N` valid — bionic's dlopen and QEMU's own `open()`
-         * both resolve that path like any other, on any Android version this
-         * app supports.
+         * it there by hand, or a future version copies it after all);
+         * failing that, it's opened straight out of the SAF tree the user
+         * picked. That descriptor is only good for as long as it stays the
+         * exact fd QEMU inherited across fork+exec — it must be handed to
+         * QEMU via `-add-fd` + `/dev/fdset/N` (see `arguments()`), *not* by
+         * building a `/proc/self/fd/N` path here: that trick only holds
+         * within a single process. Once QEMU is a forked-and-exec'd child
+         * rather than this same process calling in, re-opening that path is
+         * a brand new `open(2)` against the real file, checked against this
+         * app's own uid — which SAF granted the fd for precisely so this
+         * app would never need direct filesystem permission on it. QEMU's
+         * `-add-fd` exists for exactly this situation (a managing process
+         * that can open a disk image the emulator itself may not be able
+         * to): it hands over the already-open fd with no further `open()`
+         * involved.
+         *
+         * One such fd is not enough, though: the block layer opens a fresh
+         * fd from the set every time it needs one, matching by access mode
+         * (see monitor_fdset_dup_fd_add in QEMU) — and it opens this drive
+         * twice, first read-only while it still doesn't know whether
+         * anything will need to write to it, then again read-write once
+         * the attached nvme-ns device states its actual requirement. A set
+         * holding only an O_RDWR fd has nothing to offer the read-only
+         * request and fails outright, so both access modes are opened and
+         * registered.
          */
         fun resolveRootImage(context: Context): ResolvedRoot? {
-            localRootImage(context)?.let { return ResolvedRoot(it, null) }
+            localRootImage(context)?.let { return ResolvedRoot(it, emptyList()) }
             val doc = GuestUriStore.rootDocument(context) ?: return null
             val name = doc.name ?: return null
             val format = if (name.endsWith(".qcow2")) "qcow2" else "raw"
-            val pfd = runCatching { context.contentResolver.openFileDescriptor(doc.uri, "rw") }
+            val pfdRW = runCatching { context.contentResolver.openFileDescriptor(doc.uri, "rw") }
                 .getOrNull() ?: return null
-            return ResolvedRoot(RootImage("/proc/self/fd/${pfd.fd}", format), pfd)
+            val pfdRO = runCatching { context.contentResolver.openFileDescriptor(doc.uri, "r") }
+                .getOrNull()
+            val descriptors = listOfNotNull(pfdRW, pfdRO)
+            val image = RootImage("/dev/fdset/$ROOT_FD_SET", format, descriptors.map { it.fd })
+            return ResolvedRoot(image, descriptors)
         }
 
         fun missingFiles(context: Context): List<String> {
@@ -188,6 +221,18 @@ data class VMConfig(
         )
 
         root?.let { image ->
+            // A local copy has a plain path QEMU can open itself; a
+            // SAF-backed disk instead comes as an already-open fd this
+            // process obtained (and this process alone has permission
+            // for) — `-add-fd` hands that fd to QEMU directly, so its own
+            // `-drive file=/dev/fdset/N` never has to call `open()` on the
+            // real path at all. See resolveRootImage() for why a
+            // `/proc/self/fd/N` path — which works fine within a single
+            // process — doesn't survive fork()+execve() into a plain
+            // child process with only its own uid's permissions.
+            for (fd in image.fds) {
+                argv += listOf("-add-fd", "fd=$fd,set=$ROOT_FD_SET,opaque=root")
+            }
             argv += listOf("-drive", "file=${image.path},format=${image.format},if=none,id=root")
             argv += listOf(
                 "-device",

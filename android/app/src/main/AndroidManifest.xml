@@ -22,7 +22,8 @@
         android:theme="@style/Theme.Inferno"
         android:supportsRtl="true"
         android:hardwareAccelerated="true"
-        android:largeHeap="true">
+        android:largeHeap="true"
+        android:allowNativeHeapPointerTagging="false">
 
         <activity
             android:name=".MainActivity"

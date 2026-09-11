@@ -8,9 +8,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.makr.inferno.bridge.EmbeddedDisplay
 import com.makr.inferno.bridge.GuestDisplayStatus
-import com.makr.inferno.bridge.QemuBridge
+import com.makr.inferno.bridge.QemuProcess
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -31,7 +30,7 @@ class VMModel(application: Application) : AndroidViewModel(application) {
 
     var missing by mutableStateOf(VMConfig.missingFiles(application))
         private set
-    var qemuState by mutableStateOf(QemuBridge.State.IDLE)
+    var qemuState by mutableStateOf(QemuProcess.State.IDLE)
         private set
     var displayStatus by mutableStateOf<GuestDisplayStatus>(GuestDisplayStatus.Disconnected)
         private set
@@ -41,23 +40,36 @@ class VMModel(application: Application) : AndroidViewModel(application) {
         private set
     var networkUp by mutableStateOf(false)
         private set
-    /** QEMU is not re-entrant and lives inside this process; once a machine
-     *  has run, a second one in the same process would take it down with
-     *  it, so starting again means relaunching — same rule as iOS. */
+    /** A machine that stopped can't be started again in this process — the
+     *  emulator's own globals (QOM types registered via constructors, and
+     *  worse now) are not meant to survive a second qemu_init in the same
+     *  one, and here "the same process" is the emulator's own child, not
+     *  this app, so this is really just "don't double-launch while a
+     *  previous run's process might still be exiting." */
     var hasRun by mutableStateOf(false)
         private set
     var lastError by mutableStateOf<String?>(null)
         private set
 
-    val isRunning: Boolean get() = qemuState == QemuBridge.State.RUNNING
+    val isRunning: Boolean get() = qemuState == QemuProcess.State.RUNNING
     val framebufferSize: Pair<Int, Int>? get() = displayStatus.size
 
-    private val display = EmbeddedDisplay().apply {
+    private val process = QemuProcess().apply {
+        onStateChange = { status ->
+            qemuState = status.state
+            // STOPPED carries the tail of the child's stdout/stderr when it
+            // exited on its own (crash, bad argv, …) rather than via a
+            // clean QMP quit — see QemuProcess.readLogTail.
+            if (status.state == QemuProcess.State.FAILED || status.state == QemuProcess.State.STOPPED) {
+                lastError = status.message
+            }
+            if (status.state == QemuProcess.State.RUNNING && settings.value.network) watchNetwork()
+        }
+        onDisplayStatus = { status -> this@VMModel.displayStatus = status }
         onFrame = { bitmap ->
             frame = bitmap
             countFrame()
         }
-        onStatus = { status -> displayStatus = status }
     }
 
     private var framesThisSecond = 0
@@ -75,75 +87,53 @@ class VMModel(application: Application) : AndroidViewModel(application) {
 
     private var networkWatch: Job? = null
 
-    /** Held for as long as the machine might still be opening the root
-     *  disk — see VMConfig.ResolvedRoot. Closed once QEMU has its own
-     *  handle (in practice, for the whole run, to not race that moment). */
-    private var rootDescriptor: ParcelFileDescriptor? = null
+    /** Held for as long as the emulator's own process might still be
+     *  opening the root disk — see VMConfig.ResolvedRoot. Closed once the
+     *  machine stops (in practice, for the whole run, to not race that
+     *  moment: the fds only have to survive fork()+execve(), but there is no
+     *  cheap, precise "execve happened" signal to close them on instead). */
+    private var rootDescriptors: List<ParcelFileDescriptor> = emptyList()
 
     fun refreshFiles() {
         missing = VMConfig.missingFiles(getApplication())
     }
 
     /**
-     * `libraryPath` is the absolute path to `libqemu-aarch64-softmmu.so`.
-     * There is nowhere to default it to yet — see ANDROID-PORT.md — so the
-     * setup screen is where a build eventually offers to fetch or import
-     * it, the same way it already does for the guest image files.
+     * `execPath` is the absolute path to the emulator executable, packaged
+     * as libqemu_helper.so — see ANDROID-PORT.md and
+     * scripts/build-android-qemu.sh for why it's a real child process
+     * rather than a library loaded into this one.
      */
-    fun start(libraryPath: String) {
+    fun start(execPath: String) {
         refreshFiles()
         if (missing.isNotEmpty()) return
         lastError = null
 
-        if (!QemuBridge.nativeIsLoaded() && !QemuBridge.nativeLoad(libraryPath)) {
-            lastError = "Библиотека эмулятора не загрузилась: $libraryPath"
-            qemuState = QemuBridge.State.FAILED
-            return
-        }
-
         // Resolved here rather than inside VMConfig.arguments() because a
         // SAF-backed disk comes with a live ParcelFileDescriptor this model
-        // has to keep open for the run — VMConfig only knows the path
-        // string (/proc/self/fd/N) that descriptor makes valid.
+        // has to keep open for the run, and — new with the separate-process
+        // design — whose fd number has to be handed to ProcessLauncher so
+        // it survives into the child. VMConfig only knows the path string
+        // (/proc/self/fd/N) that descriptor makes valid.
         val resolvedRoot = VMConfig.resolveRootImage(getApplication())
         if (resolvedRoot == null) {
             lastError = "Диск устройства недоступен — выберите папку InfernoData заново"
-            qemuState = QemuBridge.State.FAILED
+            qemuState = QemuProcess.State.FAILED
             return
         }
-        rootDescriptor?.close()
-        rootDescriptor = resolvedRoot.descriptor
-
-        QemuBridge.onStateChange = { status ->
-            qemuState = status.state
-            if (status.state == QemuBridge.State.RUNNING) {
-                onMachineRunning(libraryPath)
-            }
-            if (status.state == QemuBridge.State.FAILED) {
-                lastError = status.message
-            }
-        }
+        rootDescriptors.forEach { it.close() }
+        rootDescriptors = resolvedRoot.descriptors
 
         hasRun = true
+        val application = getApplication<Application>()
         val config = settings.value.toVMConfig()
-        val args = config.arguments(getApplication(), libraryPath, resolvedRoot.image)
-        if (!QemuBridge.nativeStart(args.toTypedArray())) {
-            lastError = "Не удалось запустить поток эмулятора"
-            qemuState = QemuBridge.State.FAILED
-        }
-    }
-
-    private fun onMachineRunning(libraryPath: String) {
-        val headless = settings.value.headless
-        viewModelScope.launch {
-            // Give qemu_init time to open its sockets, same margin as
-            // QemuBridge.swift waits before connecting the display.
-            delay(1500)
-            if (!headless) {
-                display.connect()
-            }
-            if (settings.value.network) watchNetwork()
-        }
+        val args = config.arguments(application, execPath, resolvedRoot.image)
+        val env = mapOf(
+            "TMPDIR" to application.cacheDir.absolutePath,
+            "HOME" to application.filesDir.absolutePath,
+        )
+        val logFile = File(application.cacheDir, "qemu-stdio.log")
+        process.start(execPath, args, env, resolvedRoot.descriptors.map { it.fd }, logFile)
     }
 
     /** Stops the machine the only safe way there is — see QMPClient. */
@@ -152,10 +142,10 @@ class VMModel(application: Application) : AndroidViewModel(application) {
         val config = settings.value.toVMConfig()
         viewModelScope.launch {
             QMPClient.quit(config.qmpPort)
-            display.disconnect()
             networkWatch?.cancel()
-            rootDescriptor?.close()
-            rootDescriptor = null
+            process.cleanup()
+            rootDescriptors.forEach { it.close() }
+            rootDescriptors = emptyList()
         }
     }
 
@@ -163,28 +153,37 @@ class VMModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         // Belt and braces: shutdown() is the normal path, but the process
         // can go away without it running at all.
-        rootDescriptor?.close()
-        rootDescriptor = null
+        process.cleanup()
+        rootDescriptors.forEach { it.close() }
+        rootDescriptors = emptyList()
     }
 
     // MARK: Network
 
     /**
      * Polls the emulator's own answer to "did the guest ever configure its
-     * end of the link". `netAutoFix`'s active half — sending
-     * `ipconfig set en0 DHCP` down the guest's console the way
-     * `fixNetwork()` does on iOS — needs a working serial console, which
-     * isn't ported yet; this only reports status until it is.
+     * end of the link" (refreshed into the shared header by the emulator's
+     * process every couple of seconds — see QemuProcess.isNetworkUp).
+     * `netAutoFix`'s active half — sending `ipconfig set en0 DHCP` down the
+     * guest's console the way `fixNetwork()` does on iOS — needs a working
+     * serial console, which isn't ported yet; this only reports status
+     * until it is.
      */
     private fun watchNetwork() {
         networkWatch?.cancel()
         networkWatch = viewModelScope.launch {
             delay(90_000) // long enough for an unhurried boot to have got there
             while (isRunning) {
-                networkUp = QemuBridge.nativeNetLinkUp()
+                networkUp = process.isNetworkUp()
                 delay(20_000)
             }
         }
+    }
+
+    /** An immediate re-check for the "Поднять сеть в госте" menu item —
+     *  the periodic one in watchNetwork() only runs every 20s. */
+    fun refreshNetworkStatus() {
+        if (isRunning) networkUp = process.isNetworkUp()
     }
 
     // MARK: Input
@@ -208,19 +207,19 @@ class VMModel(application: Application) : AndroidViewModel(application) {
 
     fun tap(localX: Float, localY: Float, boxWidthPx: Float, boxHeightPx: Float) {
         val (gx, gy) = guestPoint(localX, localY, boxWidthPx, boxHeightPx) ?: return
-        display.sendTouch(gx, gy, pressed = true)
+        process.sendTouch(gx, gy, pressed = true)
     }
 
     fun release(localX: Float, localY: Float, boxWidthPx: Float, boxHeightPx: Float) {
         val (gx, gy) = guestPoint(localX, localY, boxWidthPx, boxHeightPx) ?: return
-        display.sendTouch(gx, gy, pressed = false)
+        process.sendTouch(gx, gy, pressed = false)
     }
 
     fun press(button: HardwareButton) {
-        display.sendFunctionKey(button.functionKey, pressed = true)
+        process.sendFunctionKey(button.functionKey, pressed = true)
         viewModelScope.launch {
             delay(button.holdMillis)
-            display.sendFunctionKey(button.functionKey, pressed = false)
+            process.sendFunctionKey(button.functionKey, pressed = false)
         }
     }
 
@@ -240,9 +239,10 @@ class VMModel(application: Application) : AndroidViewModel(application) {
     fun setNetAutoFix(v: Boolean) = viewModelScope.launch { settingsRepo.setNetAutoFix(v) }
 
     companion object {
-        /** Where a build would drop the cross-compiled library — see
-         *  ANDROID-PORT.md. Nothing places a file here yet. */
+        /** Where build-android-qemu.sh drops the cross-compiled emulator,
+         *  packaged as a "library" only so the installer extracts it with
+         *  the execute bit set — see ANDROID-PORT.md. */
         fun defaultLibraryPath(application: Application): String =
-            File(application.applicationInfo.nativeLibraryDir, "libqemu-aarch64-softmmu.so").path
+            File(application.applicationInfo.nativeLibraryDir, "libqemu_helper.so").path
     }
 }

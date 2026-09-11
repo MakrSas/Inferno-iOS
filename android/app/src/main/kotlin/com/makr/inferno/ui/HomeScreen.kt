@@ -69,7 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.makr.inferno.R
 import com.makr.inferno.bridge.GuestDisplayStatus
-import com.makr.inferno.bridge.QemuBridge
+import com.makr.inferno.bridge.QemuProcess
 import com.makr.inferno.vm.HardwareButton
 import com.makr.inferno.vm.VMModel
 import kotlin.math.min
@@ -249,7 +249,7 @@ private fun ControlSheetContent(
         ListItem(
             headlineContent = { Text(stringResource(R.string.menu_network_fix)) },
             leadingContent = { Icon(Icons.Filled.NetworkCheck, contentDescription = null) },
-            modifier = Modifier.clickableRow(enabled = model.isRunning) { QemuBridge.nativeNetLinkUp() },
+            modifier = Modifier.clickableRow(enabled = model.isRunning) { model.refreshNetworkStatus() },
         )
         ListItem(
             headlineContent = {
@@ -374,7 +374,7 @@ private suspend fun PointerInputScope.trackTouches(
 @Composable
 private fun PlaceholderContent(model: VMModel) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (model.qemuState == QemuBridge.State.RUNNING) {
+        if (model.qemuState == QemuProcess.State.RUNNING) {
             CircularProgressIndicator()
         }
         Text(
@@ -387,14 +387,14 @@ private fun PlaceholderContent(model: VMModel) {
 
 @Composable
 private fun placeholderText(model: VMModel): String = when (model.qemuState) {
-    QemuBridge.State.IDLE -> stringResource(R.string.placeholder_open_menu)
-    QemuBridge.State.RUNNING -> when (val status = model.displayStatus) {
+    QemuProcess.State.IDLE -> stringResource(R.string.placeholder_open_menu)
+    QemuProcess.State.RUNNING -> when (val status = model.displayStatus) {
         is GuestDisplayStatus.Connected ->
             stringResource(R.string.placeholder_boot_wait, status.width, status.height)
         is GuestDisplayStatus.Failed -> stringResource(R.string.placeholder_failed, status.reason)
         GuestDisplayStatus.Connecting, GuestDisplayStatus.Disconnected ->
             stringResource(R.string.placeholder_connecting)
     }
-    QemuBridge.State.STOPPED -> stringResource(R.string.placeholder_stopped)
-    QemuBridge.State.FAILED -> model.lastError ?: stringResource(R.string.placeholder_stopped)
+    QemuProcess.State.STOPPED -> stringResource(R.string.placeholder_stopped)
+    QemuProcess.State.FAILED -> model.lastError ?: stringResource(R.string.placeholder_stopped)
 }

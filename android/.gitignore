@@ -13,6 +13,10 @@ captures/
 *.iml
 .DS_Store
 
-# Where the emulator's shared library lands once it is cross-compiled
-# (see ../ANDROID-PORT.md). Never a source file, and large.
+# Where the cross-compiled emulator lands once built — a real executable
+# packaged as a "library" only so the installer extracts it with the
+# execute bit set (see ../ANDROID-PORT.md and scripts/build-android-qemu.sh).
+# Never a source file, and large.
+app/src/main/jniLibs/*/libqemu_helper.so
 app/src/main/jniLibs/*/libqemu-aarch64-softmmu.so
+app/src/main/jniLibs/*/libclang_rt.asan-aarch64-android.so

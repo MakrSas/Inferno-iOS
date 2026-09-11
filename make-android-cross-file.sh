@@ -20,6 +20,21 @@ TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64"
 BIN="$TOOLCHAIN/bin"
 TARGET="aarch64-linux-android$API"
 
+# ASAN=1 instruments this build with AddressSanitizer — for chasing the one
+# specific bug it's for (a "destroyed mutex" abort at library-load time that
+# the device's own SELinux policy won't let a normal tombstone capture, see
+# ANDROID-PORT.md), not for day-to-day builds. Only inferno-src itself gets
+# instrumented, not the dependencies from build-android-deps.sh — faster to
+# iterate on, and the suspect code is almost certainly QEMU/t8030's own.
+SAN_FLAGS=()
+if [ "${ASAN:-0}" = "1" ]; then
+    # -g too: buildtype release carries no debug info at all, so a crash
+    # address resolves to a function name (from the surviving dynamic
+    # symbol) but no source line — exactly the gap this whole detour
+    # exists to close.
+    SAN_FLAGS=(", '-fsanitize=address', '-fno-omit-frame-pointer', '-g'")
+fi
+
 [ -d "$PREFIX/lib" ] || echo "Внимание: $PREFIX/lib ещё нет — соберите зависимости." >&2
 
 cat > "$OUT" <<EOF
@@ -34,10 +49,10 @@ ranlib     = '$BIN/llvm-ranlib'
 pkg-config = 'pkg-config'
 
 [built-in options]
-c_args        = ['-fPIC', '-I$PREFIX/include']
-c_link_args   = ['-fPIC', '-L$PREFIX/lib', '-Wl,-z,max-page-size=16384']
-cpp_args      = ['-fPIC', '-I$PREFIX/include']
-cpp_link_args = ['-fPIC', '-L$PREFIX/lib', '-Wl,-z,max-page-size=16384']
+c_args        = ['-fPIC', '-I$PREFIX/include'${SAN_FLAGS[*]:-}]
+c_link_args   = ['-fPIC', '-L$PREFIX/lib', '-Wl,-z,max-page-size=16384'${SAN_FLAGS[*]:-}]
+cpp_args      = ['-fPIC', '-I$PREFIX/include'${SAN_FLAGS[*]:-}]
+cpp_link_args = ['-fPIC', '-L$PREFIX/lib', '-Wl,-z,max-page-size=16384'${SAN_FLAGS[*]:-}]
 prefix        = '$PREFIX'
 
 [host_machine]
@@ -54,3 +69,4 @@ EOF
 echo "Записан $OUT"
 echo "  NDK:    $NDK"
 echo "  prefix: $PREFIX"
+if [ "${ASAN:-0}" = "1" ]; then echo "  ASan:   включён"; fi
