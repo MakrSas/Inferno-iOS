@@ -32,6 +32,22 @@ do {
         let target = try GuestInstaller(serial: serial, files: files)
             .install(ipa: ipa, progress: { _, _ in }, note: { print("   \($0)") })
         print(String(format: "УСТАНОВЛЕНО: %@ за %.1f с", target, Date().timeIntervalSince(t0)))
+    } else if mode == "send" {
+        // Тот самый путь, которым идёт «Отправить файл в гостя…» на телефоне:
+        // через openDestination, то есть через поиск папки «Файлов» в госте.
+        // Режим `files` его обходит — зовёт carry напрямую, — а ломалось
+        // именно здесь.
+        let megabytes = CommandLine.arguments.count > 2 ? Int(CommandLine.arguments[2]) ?? 2 : 2
+        let size = megabytes * 1024 * 1024
+        let local = FileManager.default.temporaryDirectory.appendingPathComponent("send-test.bin")
+        let random = FileHandle(forReadingAtPath: "/dev/urandom")!
+        try (random.read(upToCount: size) ?? Data()).write(to: local)
+        try? random.close()
+
+        let t0 = Date()
+        let target = try files.send(local, progress: { _, _ in })
+        let took = Date().timeIntervalSince(t0)
+        print(String(format: "ОТПРАВЛЕНО: %@ — %d Б за %.1f с", target, size, took))
     } else {
         // Туда и обратно, со сверкой. Размер задаётся в мегабайтах: больше
         // окна носителя — значит передача пойдёт несколькими окнами, а это

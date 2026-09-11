@@ -192,6 +192,7 @@ final class VMModel: ObservableObject {
             }
         }
         hasRun = true
+        QemuBridge.shared.environment = Settings.shared.emulatorEnvironment
         QemuBridge.shared.start(arguments: config.arguments())
     }
 
@@ -548,7 +549,8 @@ struct RootView: View {
                     ZStack {
                         Color.black.ignoresSafeArea()
                         switch pane {
-                        case .screen:   ScreenView(model: model, picture: model.picture, fullScreen: $fullScreen)
+                        case .screen:   ScreenView(model: model, picture: model.picture, serial: model.serial,
+                                                   fullScreen: $fullScreen)
                         case .terminal: TerminalView(model: model)
                         }
                     }
@@ -755,6 +757,8 @@ struct ScreenView: View {
     /// Watched here and nowhere else, so that a new frame redraws the picture
     /// and leaves the rest of the interface alone.
     @ObservedObject var picture: GuestFrame
+    /// Watched for the console's flow rate, which sits beside the frame count.
+    @ObservedObject var serial: SerialConsole
     @ObservedObject private var settings = Settings.shared
     @Binding var fullScreen: Bool
 
@@ -786,6 +790,13 @@ struct ScreenView: View {
                       width: size.width, height: size.height)
     }
 
+    /// The console's flow, in whichever unit keeps it to three digits.
+    static func rate(_ bytes: Double) -> String {
+        if bytes >= 1024 * 1024 { return L("%.1f МБ/с", bytes / (1024 * 1024)) }
+        if bytes >= 1024 { return L("%.0f КБ/с", bytes / 1024) }
+        return L("%.0f Б/с", bytes)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let box = drawn(in: geo.size, margins())
@@ -808,7 +819,11 @@ struct ScreenView: View {
                         .position(x: box?.midX ?? geo.size.width / 2,
                                   y: box?.midY ?? geo.size.height / 2)
                     if settings.showFPS, let box {
-                        Text(String(format: "%.0f FPS", picture.fps))
+                        // The console rate belongs here too: when the guest is
+                        // pouring kernel log into the UART, the emulated cores
+                        // are formatting text instead of drawing, and the frame
+                        // count on its own does not say so.
+                        Text(String(format: "%.0f FPS · %@", picture.fps, Self.rate(serial.consoleRate)))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .position(x: box.midX, y: min(box.maxY + 16, geo.size.height - 8))

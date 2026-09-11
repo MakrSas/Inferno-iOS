@@ -22,6 +22,7 @@ final class GuestFiles {
         case networkOff
         case networkDown
         case noShell
+        case destination
         case notFound(String)
         case noConnection
         case mismatch(String)
@@ -35,6 +36,8 @@ final class GuestFiles {
                 return L("Сеть в госте не поднялась. Нажмите «Поднять сеть в госте» и попробуйте снова.")
             case .noShell:
                 return L("Шелл гостя не отвечает. Передача файлов работает только с бутстрапом, где на консоли сидит bash.")
+            case .destination:
+                return L("Не удалось подготовить папку для файлов в госте: он слишком занят. Попробуйте ещё раз.")
             case .notFound(let path):
                 return L("Нет такого файла в госте: %@", path)
             case .noConnection:
@@ -120,7 +123,7 @@ final class GuestFiles {
         let remote = "\"$F/Inferno/\"" + Self.quote(name)
         try carry(file, to: remote, shell: shell, progress: progress, note: { _ in })
         // Root wrote it; the phone's own user has to be able to open it.
-        shell.send("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null\n")
+        _ = shell.line("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null", timeout: 60)
         return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
     }
 
@@ -186,16 +189,52 @@ final class GuestFiles {
     /// If the glob matches nothing the variable holds a path that does not
     /// exist, which the test below catches.
     private func openDestination(_ shell: GuestShell) throws {
+        var heard = false
+        for attempt in 0..<2 {
+            if prepareDestination(shell, heard: &heard) { return }
+            if attempt == 0 { shell.reset() }
+        }
+        // Silence and a wrong answer are different faults, and used to be
+        // reported as the same one. Nothing at all means there is no shell on
+        // the console; an answer we did not want means the guest is there and
+        // the folder is not.
+        throw heard ? Failure.destination : Failure.noShell
+    }
+
+    /// One pass of the preparation, true when the folder is there at the end.
+    ///
+    /// Every line waits for the one before it. The `grep` walks every app group
+    /// on the phone and on a loaded guest that takes a while; whatever is sent
+    /// meanwhile only sits in the terminal, where the console drops bytes from
+    /// it — and a Ctrl-C meant to clear one mangled line throws away the rest.
+    /// That is how `$F` used to end up unset and the folder never made, with
+    /// the retry then asking about `/Inferno` and being told, honestly, no.
+    ///
+    /// So a failed check repeats the whole preparation rather than the check:
+    /// after a reset the variables are as likely to be missing as wrong.
+    private func prepareDestination(_ shell: GuestShell, heard: inout Bool) -> Bool {
         // The storage folder itself may not exist yet — the Files app creates it
         // the first time something is saved locally, and on a fresh guest that
         // has never happened. The group container is always there, though, and
         // says what it belongs to in its own metadata, so that is what is looked
         // for. Failing everything, the old place, which at least works.
-        shell.send("A=/var/mobile/Containers/Shared/AppGroup\n")
-        shell.send("G=$(grep -l LocalStorage $A/*/.com.apple*.plist 2>/dev/null|head -1)\n")
-        shell.send("[ -n \"$G\" ] && F=\"${G%/*}/File Provider Storage\" || F=/var/mobile\n")
-        shell.send("mkdir -p \"$F/Inferno\"\n")
-        try shell.requireAnswer("test -d \"$F/Inferno\" && echo 1 || echo 0")
+        //
+        // The `grep` walks every app group on the phone, which is the slow one;
+        // the rest are instant, and are given room only in case the guest is
+        // busy when they arrive.
+        let steps: [(String, TimeInterval)] = [
+            ("A=/var/mobile/Containers/Shared/AppGroup", 30),
+            ("G=$(grep -l LocalStorage $A/*/.com.apple*.plist 2>/dev/null|head -1)", 180),
+            ("[ -n \"$G\" ] && F=\"${G%/*}/File Provider Storage\" || F=/var/mobile", 30),
+            ("mkdir -p \"$F/Inferno\"", 60),
+        ]
+        for (command, timeout) in steps {
+            guard shell.line(command, timeout: timeout) != nil else { return false }
+            heard = true
+        }
+        guard let answer = shell.number("test -d \"$F/Inferno\" && echo 1 || echo 0") else { return false }
+        heard = true
+        return answer == 1
     }
 
     // MARK: - From the guest
@@ -428,6 +467,25 @@ final class GuestShell {
     /// failed.
     func run(_ command: String, timeout: TimeInterval = 120) -> Int64? {
         number("{ \(command) ;} >/dev/null 2>&1; echo $?", timeout: timeout)
+    }
+
+    /// Runs a line in the shell itself and hands back its exit status.
+    ///
+    /// `run` cannot do this: its command substitution is a child shell, so a
+    /// variable set there dies with it. Here the marker rides on the same line
+    /// as the work, which is what makes the waiting safe — nothing of ours is
+    /// left sitting in the terminal while the guest is busy, and the console
+    /// loses bytes only from what sits there.
+    @discardableResult
+    func line(_ command: String, timeout: TimeInterval = 120) -> Int64? {
+        let tag = String(format: "%04x", UInt16.random(in: 0...UInt16.max))
+        // The status is caught before anything else runs, or it would be the
+        // status of the assignment right after it — which is always success.
+        send("\(command); s=$?; v=VAL; t=\(tag); echo \"$v$t $s\"\n")
+        guard let rest = wait(for: "VAL" + tag, timeout: timeout),
+              let first = rest.split(separator: " ").first
+        else { return nil }
+        return Int64(first)
     }
 
     /// Runs a check that must answer with one of `accepting`; one retry after

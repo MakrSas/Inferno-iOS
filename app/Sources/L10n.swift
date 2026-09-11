@@ -63,6 +63,9 @@ enum L10n {
         "%.0f КБ": "%.0f KB",
         "%.1f МБ": "%.1f MB",
         "%@ за %.1f с · %.0f КБ/с": "%@ in %.1f s · %.0f KB/s",
+        "%.1f МБ/с": "%.1f MB/s",
+        "%.0f КБ/с": "%.0f KB/s",
+        "%.0f Б/с": "%.0f B/s",
         "%@ из %@": "%@ of %@",
         "%d МБ": "%d MB",
         "Нет такого файла в госте: %@": "No such file in the guest: %@",
@@ -71,6 +74,8 @@ enum L10n {
 
         "Гость не подключился к приложению: команда не дошла или сеть не работает.": "The guest never connected to the app: the command did not arrive or the network is down.",
         "Шелл гостя не отвечает. Передача файлов работает только с бутстрапом, где на консоли сидит bash.": "The guest's shell is not answering. File transfer needs the bootstrap with bash on the console.",
+        "Не удалось подготовить папку для файлов в госте: он слишком занят. Попробуйте ещё раз.":
+            "The folder for files could not be made ready in the guest: it is too busy. Try again.",
         "Сеть в госте не поднялась. Нажмите «Поднять сеть в госте» и попробуйте снова.": "The guest's network did not come up. Tap “Bring the network up in the guest” and try again.",
         "Включите «Интернет через USB» в параметрах: файлы идут по той же сети.": "Turn on “Internet over USB” in the settings: files travel over the same network.",
         "Файл появится в папке Guest приложения — её видно в «Файлах».": "The file will appear in the app's Guest folder, visible in the Files app.",
@@ -104,8 +109,11 @@ enum L10n {
         "Вид": "View",
         "Сеть: консоль занята, попрошу позже.": "Network: the console is busy, will ask later.",
         "Счётчик кадров": "Frame counter",
-        "Под экраном гостя, для интереса: сколько кадров он успел нарисовать за секунду. Считаются те, что дошли до приложения.":
-            "Under the guest's screen, for the fun of it: how many frames it managed in the last second. Counted as they reach the app.",
+        "Ядрам гостя — быстрые ядра телефона": "Fast phone cores for the guest's cores",
+        "Потоки эмулируемых ядер просят у iOS высший класс обслуживания. Без этого они получают обычный, и телефон вправе увести их на энергоэффективные ядра. Применяется при запуске машины.":
+            "The threads running the emulated cores ask iOS for the highest quality of service. Without it they get the default one, and the phone is free to move them to the efficiency cores. Applied when the machine starts.",
+        "Под экраном гостя: сколько кадров он успел нарисовать за секунду — считаются дошедшие до приложения, — и сколько он льёт в консоль. Второе число важнее, чем кажется: пока гость печатает мегабайты в секунду, его ядра заняты этим, а не картинкой.":
+            "Under the guest's screen: how many frames it managed in the last second, counted as they reach the app, and how much it is pouring into the console. The second number matters more than it looks: while the guest prints megabytes a second, its cores are busy with that rather than with the picture.",
         "Сеть: гость погасил связь.": "Network: the guest took the link down.",
         "Кнопки: экран не подключён, нажатие некуда отправить.":
             "Buttons: no screen attached, nowhere to send the press.",

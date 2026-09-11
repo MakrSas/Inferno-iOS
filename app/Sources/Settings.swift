@@ -24,6 +24,10 @@ final class Settings: ObservableObject {
     @AppStorage("tbSize") var tbSize: Int = 128 {
         willSet { objectWillChange.send() }
     }
+    /// Whether the guest's cores ask the phone for the fast cores.
+    @AppStorage("vcpuPriority") var vcpuPriority: Bool = true {
+        willSet { objectWillChange.send() }
+    }
 
     // The picture
     @AppStorage("headless") var headless: Bool = false {
@@ -60,6 +64,14 @@ final class Settings: ObservableObject {
 
     @AppStorage("language") var language: String = AppLanguage.system.rawValue {
         willSet { objectWillChange.send() }
+    }
+
+    /// What the emulator is told through the environment. Empty means the old
+    /// behaviour in both cases, so an unknown build behaves as it always did.
+    var emulatorEnvironment: [String: String] {
+        var env: [String: String] = [:]
+        if vcpuPriority { env["INFERNO_VCPU_QOS"] = "interactive" }
+        return env
     }
 
     var config: VMConfig {
@@ -174,9 +186,15 @@ private struct ScreenSettings: View {
                 }
 
                 Section {
+                    Toggle(L("Ядрам гостя — быстрые ядра телефона"), isOn: $settings.vcpuPriority)
+                } footer: {
+                    Text(L("Потоки эмулируемых ядер просят у iOS высший класс обслуживания. Без этого они получают обычный, и телефон вправе увести их на энергоэффективные ядра. Применяется при запуске машины."))
+                }
+
+                Section {
                     Toggle(L("Счётчик кадров"), isOn: $settings.showFPS)
                 } footer: {
-                    Text(L("Под экраном гостя, для интереса: сколько кадров он успел нарисовать за секунду. Считаются те, что дошли до приложения."))
+                    Text(L("Под экраном гостя: сколько кадров он успел нарисовать за секунду — считаются дошедшие до приложения, — и сколько он льёт в консоль. Второе число важнее, чем кажется: пока гость печатает мегабайты в секунду, его ядра заняты этим, а не картинкой."))
                 }
 
                 Section {
