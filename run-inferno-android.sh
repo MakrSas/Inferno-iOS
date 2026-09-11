@@ -21,9 +21,22 @@ DISPW="${INFERNO_DISP_WIDTH:-828}"
 DISPH="${INFERNO_DISP_HEIGHT:-1792}"
 DISPS="${INFERNO_DISP_SCALE:-2}"
 
+# Носитель для быстрой передачи файлов: хост пишет байты в этот файл, гость
+# читает их прямо как блочное устройство (`/dev/rdisk2`). Мегабайты, а не
+# килобайты, и мимо консоли. Гость увидит его только у эмулятора с патчем,
+# который описывает namespace'ы в device tree; без патча файл просто не нужен.
+# Гигабайт не требуется: ограничение «не меньше 1 ГиБ» есть только у namespace'а
+# с nstype=1, то есть у корневого диска.
+XFERMB="${INFERNO_XFER_MB:-16}"
+
 for f in "$QEMU" "$DATA/root" "$SEPROM"; do
     [ -e "$f" ] || { echo "Нет файла: $f" >&2; exit 1; }
 done
+
+if [ "$XFERMB" -gt 0 ] && [ ! -e "$DATA/xfer" ]; then
+    # Разрежённый: места занимает столько, сколько в него написали.
+    dd if=/dev/zero of="$DATA/xfer" bs=1 count=0 seek=$((XFERMB * 1024 * 1024)) 2>/dev/null
+fi
 
 rm -f "$SOCK"
 : > "$BASE/inferno-serial.log"
@@ -55,6 +68,14 @@ set -- \
     -device 'nvme-ns,drive=effaceable,bus=nvme-bus.0,nsid=6,nstype=6,logical_block_size=4096,physical_block_size=4096' \
     -drive "file=$DATA/panic_log,format=raw,if=none,id=panic_log" \
     -device 'nvme-ns,drive=panic_log,bus=nvme-bus.0,nsid=7,nstype=8,logical_block_size=4096,physical_block_size=4096'
+
+if [ -e "$DATA/xfer" ]; then
+    # cache=none обязателен: иначе эмулятор отвечает из кэша страниц хоста и
+    # гость читает то, что лежало в файле до записи.
+    set -- "$@" \
+        -drive "file=$DATA/xfer,format=raw,if=none,id=xfer,cache=none" \
+        -device 'nvme-ns,drive=xfer,bus=nvme-bus.0,nsid=8,nstype=2,logical_block_size=4096,physical_block_size=4096'
+fi
 
 if [ -n "${INFERNO_GDB:-}" ]; then
     exec gdb -q -batch -ex "set confirm off" -ex "handle SIGUSR1 SIGUSR2 SIGPIPE nostop noprint pass" -ex run -ex "bt 30" --args "$QEMU" "$@"

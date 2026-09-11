@@ -192,6 +192,7 @@ final class VMModel: ObservableObject {
             }
         }
         hasRun = true
+        QemuBridge.shared.environment = Settings.shared.emulatorEnvironment
         QemuBridge.shared.start(arguments: config.arguments())
     }
 
@@ -327,6 +328,59 @@ final class VMModel: ObservableObject {
         }
     }
 
+    /// One button: unpack the `.ipa` here, carry it in by whichever channel is
+    /// available, and put it in `/Applications`. The first run also leaves the
+    /// helper in the guest, so every later install finds it already there.
+    func installIPA(_ url: URL) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        guard url.pathExtension.lowercased() == "ipa" else {
+            transfer = .failed(L("Нужен файл .ipa.")); return
+        }
+        let name = url.lastPathComponent
+        transfer = .running(title: L("→ установка %@", name), done: 0, total: 0)
+        LogCapture.shared.note("Установка: \(name)")
+        let installer = GuestInstaller(serial: serial, files: files)
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Files picked from the Files app are lent, not given.
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let started = Date()
+            // Which step is running, so the progress bar keeps saying it while
+            // the bytes move. Both closures are called from this thread, one
+            // after another, so the plain variable is enough.
+            var phase = L("→ установка %@", name)
+            do {
+                var last = Date.distantPast
+                let target = try installer.install(ipa: url, progress: { done, total in
+                    guard Date().timeIntervalSince(last) > 0.1 || done == total else { return }
+                    last = Date()
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: phase, done: done, total: total)
+                    }
+                }, note: { line in
+                    phase = line
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: line, done: 0, total: 0)
+                    }
+                })
+                let summary = TransferState.summary(url: url, seconds: Date().timeIntervalSince(started))
+                // A warning is not a failure: the app is installed either way,
+                // and saying why it will not start beats letting it look broken.
+                let caveat = installer.warning.map { "\n" + $0 } ?? ""
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Установлено: %@", target) + "\n" + summary + caveat)
+                    LogCapture.shared.note("Установка: \(name) → \(target), \(summary)\(caveat)")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note("Установка: \(name) — \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     func receiveFromGuest(_ path: String) {
         let remote = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !remote.isEmpty, transfer?.isRunning != true else { return }
@@ -445,6 +499,7 @@ struct RootView: View {
     @State private var pane: Pane = .screen
     @State private var fullScreen = false
     @State private var pickFile = false
+    @State private var pickIPA = false
     @State private var askPath = false
     @State private var guestPath = "/var/mobile/"
     /// Where the button sits, as a fraction of the view, so that it stays put
@@ -494,7 +549,8 @@ struct RootView: View {
                     ZStack {
                         Color.black.ignoresSafeArea()
                         switch pane {
-                        case .screen:   ScreenView(model: model, picture: model.picture, fullScreen: $fullScreen)
+                        case .screen:   ScreenView(model: model, picture: model.picture, serial: model.serial,
+                                                   fullScreen: $fullScreen)
                         case .terminal: TerminalView(model: model)
                         }
                     }
@@ -502,7 +558,7 @@ struct RootView: View {
                         if !fullScreen {
                             GeometryReader { geo in
                                 ControlMenu(model: model, pane: $pane, fullScreen: $fullScreen,
-                                            pickFile: $pickFile, askPath: $askPath)
+                                            pickFile: $pickFile, pickIPA: $pickIPA, askPath: $askPath)
                                     .position(menuPoint(in: geo))
                                     // Simultaneous, so a tap still opens the
                                     // menu and only a real drag moves it.
@@ -522,6 +578,11 @@ struct RootView: View {
             // settings sheet, and two sheet-like presentations on one view fight.
             .fileImporter(isPresented: $pickFile, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result { model.sendToGuest(url) }
+            }
+            // A second importer, not a second sheet: only one of the two is ever
+            // presented, so they do not fight the way two sheets would.
+            .fileImporter(isPresented: $pickIPA, allowedContentTypes: [.item]) { result in
+                if case .success(let url) = result { model.installIPA(url) }
             }
             .alert(L("Забрать файл из гостя"), isPresented: $askPath) {
                 TextField(L("Путь в госте"), text: $guestPath)
@@ -563,6 +624,7 @@ struct ControlMenu: View {
     @Binding var pane: Pane
     @Binding var fullScreen: Bool
     @Binding var pickFile: Bool
+    @Binding var pickIPA: Bool
     @Binding var askPath: Bool
     @State private var showSettings = false
     @State private var confirmQuit = false
@@ -614,6 +676,9 @@ struct ControlMenu: View {
                 Button(L("Забрать файл из гостя…"), systemImage: "square.and.arrow.down") {
                     askPath = true
                 }
+                Button(L("Установить .ipa в гостя…"), systemImage: "arrow.down.app") {
+                    pickIPA = true
+                }
             }
             .disabled(!model.isRunning || model.transfer?.isRunning == true)
 
@@ -647,6 +712,13 @@ struct ControlMenu: View {
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 48, height: 48)
+        // glassEffect itself is only declared in the iOS 26 SDK — #available
+        // guards it at runtime, but a toolchain built against an older SDK
+        // (Xcode below 26, as CI's still is) can't even see the symbol to
+        // compile this file. Gate it on the compiler too, so the same source
+        // builds on both: real glass with Xcode 26, the material fallback
+        // everywhere else.
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             // Clipped as well as shaped. While the menu opens, the glass is
             // handed to the presentation animation, and for a frame or two it
@@ -661,6 +733,13 @@ struct ControlMenu: View {
                 .contentShape(Circle())
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
         }
+        #else
+        face.background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            .clipShape(Circle())
+            .contentShape(Circle())
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+        #endif
     }
 
     private var startTitle: String {
@@ -678,6 +757,8 @@ struct ScreenView: View {
     /// Watched here and nowhere else, so that a new frame redraws the picture
     /// and leaves the rest of the interface alone.
     @ObservedObject var picture: GuestFrame
+    /// Watched for the console's flow rate, which sits beside the frame count.
+    @ObservedObject var serial: SerialConsole
     @ObservedObject private var settings = Settings.shared
     @Binding var fullScreen: Bool
 
@@ -709,6 +790,13 @@ struct ScreenView: View {
                       width: size.width, height: size.height)
     }
 
+    /// The console's flow, in whichever unit keeps it to three digits.
+    static func rate(_ bytes: Double) -> String {
+        if bytes >= 1024 * 1024 { return L("%.1f МБ/с", bytes / (1024 * 1024)) }
+        if bytes >= 1024 { return L("%.0f КБ/с", bytes / 1024) }
+        return L("%.0f Б/с", bytes)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let box = drawn(in: geo.size, margins())
@@ -731,7 +819,11 @@ struct ScreenView: View {
                         .position(x: box?.midX ?? geo.size.width / 2,
                                   y: box?.midY ?? geo.size.height / 2)
                     if settings.showFPS, let box {
-                        Text(String(format: "%.0f FPS", picture.fps))
+                        // The console rate belongs here too: when the guest is
+                        // pouring kernel log into the UART, the emulated cores
+                        // are formatting text instead of drawing, and the frame
+                        // count on its own does not say so.
+                        Text(String(format: "%.0f FPS · %@", picture.fps, Self.rate(serial.consoleRate)))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .position(x: box.midX, y: min(box.maxY + 16, geo.size.height - 8))

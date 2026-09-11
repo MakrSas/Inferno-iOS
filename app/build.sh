@@ -5,6 +5,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/.build"
+# Собранный вручную .ipa кладётся в корень проекта: туда за ним приходят руками,
+# и это правило проекта (CLAUDE.md).
+#
+# В CI путь остаётся прежним. Рабочий процесс забирает артефакт из app/ и падает,
+# если файла там нет, — ломать его ради местного удобства незачем.
+PROJECT="$(cd "$ROOT/.." && pwd)"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    IPA="$ROOT/Inferno.ipa"
+else
+    IPA="$PROJECT/Inferno.ipa"
+fi
 # Ищем библиотеку эмулятора там, где она обычно и лежит: сначала рядом с
 # репозиторием, как описано в README, потом в дереве сборки. Переопределяется
 # переменной INFERNO_DYLIB.
@@ -62,24 +73,26 @@ cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 # shipped in derivative builds (ui/icons/CKBrandingNotice.md in the emulator
 # tree); the fork starts without it.
 
-# App icon. Icon Composer's .icon bundle is what actool takes now: it renders
-# the layers into Assets.car for iOS 26's glass treatment and drops flat PNGs
-# beside it for everything older. The Info.plist keys it needs come back in a
-# partial plist, which is merged rather than transcribed — that way a change in
-# the icon does not need a change here.
-ICON="$ROOT/Resources/Inferno.icon"
-# Icon Composer's .icon bundle needs Xcode 26+. Where that is not available
-# (older CI images), INFERNO_NO_ICON=1 skips it — the app just ships without a
-# rendered icon.
-if [ -d "$ICON" ] && [ -z "${INFERNO_NO_ICON:-}" ]; then
-    echo "==> Иконка"
+# App icon. Two sources, same actool-compile-then-merge-partial-plist dance:
+# the Info.plist keys actool wants come back in a partial plist, merged
+# rather than transcribed so a change to the icon needs no change here.
+#
+#   Inferno.icon   — Icon Composer's bundle, iOS 26's Liquid Glass layers.
+#                    Only actool from Xcode 26+ can compile it.
+#   Assets.xcassets — a flat PNG catalog rendered from the same artwork
+#                    (scripts/render-icon.py), for older Xcode. Works
+#                    everywhere but does not get the glass treatment.
+#
+# Local builds get the real one; INFERNO_NO_ICON=1 skips both (app ships
+# with no icon at all).
+compile_icon() { # compile_icon <catalog-dir> <app-icon-name>
     xcrun actool --compile "$APP" \
         --platform iphoneos \
         --minimum-deployment-target 16.0 \
-        --app-icon Inferno \
+        --app-icon "$2" \
         --output-partial-info-plist "$BUILD/icon.plist" \
         --include-all-app-icons \
-        "$ICON" > /dev/null
+        "$1" > /dev/null
     python3 - "$APP/Info.plist" "$BUILD/icon.plist" <<'PY'
 import plistlib, sys
 target, partial = sys.argv[1], sys.argv[2]
@@ -89,6 +102,31 @@ extra.pop('com.apple.actool.compilation-results', None)
 info.update(extra)
 with open(target, 'wb') as f: plistlib.dump(info, f)
 PY
+}
+
+ICON="$ROOT/Resources/Inferno.icon"
+FALLBACK_ICON="$ROOT/Resources/Assets.xcassets"
+if [ -z "${INFERNO_NO_ICON:-}" ]; then
+    if [ -d "$ICON" ] && xcrun actool --version >/dev/null 2>&1 && \
+       xcrun actool --compile /tmp --app-icon Inferno "$ICON" >/tmp/actool-probe.log 2>&1; then
+        echo "==> Иконка (Icon Composer)"
+        compile_icon "$ICON" Inferno
+    elif [ -d "$FALLBACK_ICON" ]; then
+        echo "==> Иконка (плоский .xcassets — Xcode тут старше 26, .icon не берёт)"
+        compile_icon "$FALLBACK_ICON" AppIcon
+    fi
+fi
+
+echo "==> Помощник для гостя (nsio)"
+# Читать и писать namespace NVMe внутри гостя может только бинарник с правами:
+# шеллу блочные устройства закрыты. Помощник едет в бандле, приложение кладёт
+# его в гостя один раз. Без него установка .ipa не ломается — она просто идёт по
+# сети, которая в разы медленнее.
+if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1; then
+    mkdir -p "$APP/guest-tools"
+    "$ROOT/../netlab/build-nsio.sh" "$APP/guest-tools/nsio" >/dev/null
+else
+    echo "    нет ldid — собираю без помощника (быстрый канал будет недоступен)"
 fi
 
 echo "==> Подпись"
@@ -102,9 +140,9 @@ echo "==> Упаковка"
 cd "$BUILD"
 # zip adds to an existing archive instead of replacing it, which would carry
 # files from an earlier build into this one.
-rm -f "$ROOT/Inferno.ipa"
-zip -qry "$ROOT/Inferno.ipa" Payload -x '*.DS_Store'
+rm -f "$IPA"
+zip -qry "$IPA" Payload -x '*.DS_Store'
 
 echo
-echo "Готово: $ROOT/Inferno.ipa"
-ls -lh "$ROOT/Inferno.ipa"
+echo "Готово: $IPA"
+ls -lh "$IPA"

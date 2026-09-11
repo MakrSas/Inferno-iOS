@@ -24,6 +24,11 @@ enum Bootstrap {
             }
         }
 
+        // The scratch namespace for fast transfers. Made here so it exists
+        // before the emulator's command line is built; the machine only picks
+        // it up when the file is already there.
+        VMConfig.ensureTransferImage()
+
         let readme = documents.appendingPathComponent(L("КУДА КЛАСТЬ ФАЙЛЫ.txt"))
         if !fm.fileExists(atPath: readme.path) {
             try? note.data(using: .utf8)?.write(to: readme)

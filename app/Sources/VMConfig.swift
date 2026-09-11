@@ -29,6 +29,9 @@ struct VMConfig {
     /// framebuffer and dropping the scale to one keeps the same interface over
     /// a quarter of the pixels, and the app scales the picture back up so it
     /// covers the same area of the screen.
+    /// Whether the machine is given a way to be heard. The emulated sound card
+    /// exists either way; this decides whether anything is on the other end.
+    var audio: Bool = false
     var displayWidth: Int = 828
     var displayHeight: Int = 1792
     var displayScale: Int = 2
@@ -38,6 +41,27 @@ struct VMConfig {
     }
 
     static var dataDirectory: URL { documents.appendingPathComponent("InfernoData") }
+
+    /// The scratch namespace both sides reach: the app writes bytes into this
+    /// file, the guest reads the same place as a block device.
+    static var transferImage: URL { dataDirectory.appendingPathComponent("xfer") }
+    /// Sixteen mebibytes, and sparse, so it costs nothing until it is used. A
+    /// gibibyte is not required: that floor applies only to a namespace with
+    /// nstype=1, which is the root disk.
+    static let transferBytes: Int64 = 16 * 1024 * 1024
+
+    /// Creates the scratch namespace if it is not there yet.
+    static func ensureTransferImage() {
+        let path = transferImage.path
+        guard !FileManager.default.fileExists(atPath: path) else { return }
+        guard FileManager.default.createFile(atPath: path, contents: nil) else { return }
+        // Truncated rather than written: the file reads as zeroes and occupies
+        // only the blocks that are actually used.
+        if let handle = try? FileHandle(forWritingTo: transferImage) {
+            try? handle.truncate(atOffset: UInt64(transferBytes))
+            try? handle.close()
+        }
+    }
     /// Where the emulator must chdir to before the sockets below resolve.
     static var socketDirectory: String { NSTemporaryDirectory() }
     static let usbSocketName = "inferno-usb.sock"
@@ -144,6 +168,12 @@ struct VMConfig {
             "-drive", "file=\(data)/sep_ssc,if=pflash,format=raw",
         ]
 
+        if !audio {
+            // Silence is asked for explicitly: with no audiodev named, the
+            // machine's sound card takes the first output the build offers.
+            argv += ["-audiodev", "none,id=quiet"]
+        }
+
         if headless || builtInDisplay {
             // Nothing for the emulator to serve: either there is no screen at
             // all, or the app reads the framebuffer directly once the machine
@@ -170,6 +200,22 @@ struct VMConfig {
         for ns in namespaces {
             argv += ["-drive", "file=\(data)/\(ns.file),format=raw,if=none,id=\(ns.file)"]
             argv += ["-device", "nvme-ns,drive=\(ns.file),bus=nvme-bus.0,nsid=\(ns.nsid),nstype=\(ns.nstype),logical_block_size=4096,physical_block_size=4096"]
+        }
+
+        // A scratch namespace that both sides can reach: the app writes bytes
+        // into the file, the guest reads them straight off the block device, and
+        // nothing travels through the console or the network on the way. It is
+        // attached only when the file exists, because the guest only learns of a
+        // namespace if the emulator describes it in the device tree — an
+        // emulator without that patch would simply ignore this one.
+        //
+        // cache=none is not a tuning knob here. Without it the emulator answers
+        // out of the host's page cache and the guest reads what the file used to
+        // hold, which looks exactly like a corrupt transfer.
+        let transfer = VMConfig.dataDirectory.appendingPathComponent("xfer")
+        if FileManager.default.fileExists(atPath: transfer.path) {
+            argv += ["-drive", "file=\(transfer.path),format=raw,if=none,id=xfer,cache=none"]
+            argv += ["-device", "nvme-ns,drive=xfer,bus=nvme-bus.0,nsid=8,nstype=2,logical_block_size=4096,physical_block_size=4096"]
         }
 
         if network {

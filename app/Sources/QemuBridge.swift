@@ -31,6 +31,13 @@ final class QemuBridge {
     /// Emulator lifecycle changes, delivered on the main queue.
     var onStateChange: ((State) -> Void)?
 
+    /// Switches the emulator reads from the environment rather than from the
+    /// command line. They are not machine properties — they choose between two
+    /// ways of doing the same thing, and exist so the two can be compared on
+    /// the device, where the frame rate is the only honest measurement. Set
+    /// before `start`; read once, as the machine comes up.
+    var environment: [String: String] = [:]
+
     private func set(_ new: State) {
         DispatchQueue.main.async {
             self.state = new
@@ -94,7 +101,12 @@ final class QemuBridge {
         }
 
         let argv = arguments
+        let env = environment
         let thread = Thread {
+            for (name, value) in env {
+                setenv(name, value, 1)
+                LogCapture.shared.note("\(name)=\(value)")
+            }
             // Build a C argv that stays alive for the whole run.
             var cargs: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) }
             cargs.append(nil)

@@ -3,6 +3,21 @@
 #
 #   lab-up.sh [fresh]   fresh — начать с чистого состояния
 #
+# GUI=sdl — открыть окно с экраном гостя (по умолчанию окна нет).
+#
+# DISP задаёт панель: disp-scale — это пиксели на точку. scale=1 отдаёт вчетверо
+# меньше пикселей, но iOS рисует не-Retina и берёт @1x-ресурсы — интерфейс
+# «плывёт». Чтобы снять нагрузку и сохранить чёткость, лучше оставить scale=2 и
+# уменьшить панель: 750x1334 — как iPhone 8, 640x1136 — как SE.
+#
+# Звук хоста не трогаем: машина создаёт apple-mca, тот открывает выход 48 кГц,
+# а бэкенд coreaudio задаёт формат и размер буфера НА САМОМ УСТРОЙСТВЕ вывода
+# (`AudioObjectSetPropertyData`, `hw/../audio/coreaudio.m`). На Bluetooth-
+# наушниках это слышно сразу: звук всей системы садится до «рации», пока ВМ
+# жива. Гостевого звука всё равно нет — aop-audio в t8030.c закомментирован, —
+# поэтому по умолчанию отдаём машине пустой звуковой бэкенд. SOUND=1 вернёт
+# прежнее поведение.
+#
 # Состояние живёт в netlab/state и переживает перезапуски: оверлей поверх
 # неприкосновенного stage/InfernoData/root плюс копии мелких файлов. Базовый
 # образ не меняется, так что рассогласование диска и SEP невозможно.
@@ -30,6 +45,15 @@ fi
 mkdir -p "$LAB/L/icons"
 cp -f "$SRC/ui/icons/CKQEMUBootSplash_512x512@2x.png" "$LAB/L/icons/CKQEMUBootSplash@2x.png"
 
+# Окно SDL растягивает кадр ближайшим соседом — на нестандартном разрешении
+# это видно сразу. SDL2 читает хинты из окружения, так что пересборка не нужна;
+# linear сглаживает при любом масштабе.
+export SDL_RENDER_SCALE_QUALITY="${SDL_RENDER_SCALE_QUALITY:-linear}"
+
+# Пустой звуковой бэкенд, если не попросили обратного — см. шапку.
+QUIET_AUDIO="-audiodev none,id=quiet"
+[ -n "${SOUND:-}" ] && QUIET_AUDIO=""
+
 rm -f "$QMP"
 D="$STAGE/InfernoData"
 "$QEMU" \
@@ -43,7 +67,8 @@ D="$STAGE/InfernoData"
   -chardev "socket,id=serial0,host=127.0.0.1,port=4555,server=on,wait=off,logfile=${GLOG:-$LAB/guest.log},logappend=off" \
   -serial chardev:serial0 \
   -qmp "unix:$QMP,server,nowait" \
-  -display none \
+  -display "${GUI:-none}" \
+  $QUIET_AUDIO \
   ${VNC:+-vnc 127.0.0.1:0,password=on} \
   ${NET:+-netdev user,id=n0} \
   ${NET:+-device apple-ncm-host,netdev=n0,conn-addr=$SOCK} \

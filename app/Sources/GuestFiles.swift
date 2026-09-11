@@ -22,6 +22,7 @@ final class GuestFiles {
         case networkOff
         case networkDown
         case noShell
+        case destination
         case notFound(String)
         case noConnection
         case mismatch(String)
@@ -35,6 +36,8 @@ final class GuestFiles {
                 return L("Сеть в госте не поднялась. Нажмите «Поднять сеть в госте» и попробуйте снова.")
             case .noShell:
                 return L("Шелл гостя не отвечает. Передача файлов работает только с бутстрапом, где на консоли сидит bash.")
+            case .destination:
+                return L("Не удалось подготовить папку для файлов в госте: он слишком занят. Попробуйте ещё раз.")
             case .notFound(let path):
                 return L("Нет такого файла в госте: %@", path)
             case .noConnection:
@@ -67,9 +70,46 @@ final class GuestFiles {
     // MARK: - To the guest
 
     /// Returns the path the file ended up at inside the guest.
+    ///
+    /// The network is no longer demanded up front: with the helper already in
+    /// the guest the bytes ride the namespace, and that works whether or not
+    /// the link is up. It is asked for only when the slow path is the one left.
     func send(_ file: URL, progress: @escaping (Int64, Int64) -> Void) throws -> String {
+        try serial.exclusive { try sendExclusively(file, progress: progress) }
+    }
+
+    /// Moves a local file to an exact path in the guest by the fastest channel
+    /// there is, falling back to the network. Shared by the file menu and the
+    /// `.ipa` installer, so both get the same speed and the same checking.
+    func carry(_ file: URL, to remote: String, shell: GuestShell,
+               progress: @escaping (Int64, Int64) -> Void,
+               note: @escaping (String) -> Void) throws {
+        // The folder has to exist before anything is poured into it. When it did
+        // not, the guest's `cat` failed on opening the file and closed the
+        // socket, and this end saw only "Broken pipe" — a true statement about
+        // the socket that says nothing about the cause. One short command costs
+        // nothing and removes the whole class of confusion.
+        _ = shell.run("mkdir -p \"$(dirname \(remote))\"")
+
+        if let fast = fastChannel(shell, note: note) {
+            note(L("Канал: NVMe, %@.", fast.device))
+            try fast.send(file, to: remote, shell: shell, progress: progress)
+            return
+        }
+        note(L("Канал: USB-сеть."))
         try requireNetwork()
-        return try serial.exclusive { try sendExclusively(file, progress: progress) }
+        try stream(file, to: remote, shell: shell, progress: progress)
+    }
+
+    /// The fast channel, or nil when the emulator does not offer one. Looked up
+    /// once per transfer: finding it costs a couple of short commands.
+    private func fastChannel(_ shell: GuestShell, note: @escaping (String) -> Void) -> TransferNamespace? {
+        TransferNamespace.discover(shell: shell, deliver: { local, path in
+            // The helper itself can only come in the slow way — it is what makes
+            // the fast way possible.
+            try self.requireNetwork()
+            try self.stream(local, to: Self.quote(path), shell: shell, progress: { _, _ in })
+        }, note: note)
     }
 
     private func sendExclusively(_ file: URL, progress: @escaping (Int64, Int64) -> Void) throws -> String {
@@ -81,6 +121,16 @@ final class GuestFiles {
         // folder it points at has spaces in its name, and a path with spaces is
         // one more thing to get wrong on a console that drops bytes.
         let remote = "\"$F/Inferno/\"" + Self.quote(name)
+        try carry(file, to: remote, shell: shell, progress: progress, note: { _ in })
+        // Root wrote it; the phone's own user has to be able to open it.
+        _ = shell.line("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null", timeout: 60)
+        return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
+    }
+
+    /// The transfer itself. `remote` is already a shell expression — a quoted
+    /// path, or one built around a variable the guest holds.
+    private func stream(_ file: URL, to remote: String, shell: GuestShell,
+                        progress: @escaping (Int64, Int64) -> Void) throws {
         let handle: FileHandle
         do { handle = try FileHandle(forReadingFrom: file) }
         catch { throw Failure.io(error.localizedDescription) }
@@ -125,9 +175,6 @@ final class GuestFiles {
         while Darwin.recv(conn, &scratch, scratch.count, 0) > 0 {}
 
         try verify(shell, path: remote, sum)
-        // Root wrote it; the phone's own user has to be able to open it.
-        shell.send("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null\n")
-        return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
     }
 
     /// Points the guest's `$F` at somewhere its own Files app will look.
@@ -142,24 +189,59 @@ final class GuestFiles {
     /// If the glob matches nothing the variable holds a path that does not
     /// exist, which the test below catches.
     private func openDestination(_ shell: GuestShell) throws {
+        var heard = false
+        for attempt in 0..<2 {
+            if prepareDestination(shell, heard: &heard) { return }
+            if attempt == 0 { shell.reset() }
+        }
+        // Silence and a wrong answer are different faults, and used to be
+        // reported as the same one. Nothing at all means there is no shell on
+        // the console; an answer we did not want means the guest is there and
+        // the folder is not.
+        throw heard ? Failure.destination : Failure.noShell
+    }
+
+    /// One pass of the preparation, true when the folder is there at the end.
+    ///
+    /// Every line waits for the one before it. The `grep` walks every app group
+    /// on the phone and on a loaded guest that takes a while; whatever is sent
+    /// meanwhile only sits in the terminal, where the console drops bytes from
+    /// it — and a Ctrl-C meant to clear one mangled line throws away the rest.
+    /// That is how `$F` used to end up unset and the folder never made, with
+    /// the retry then asking about `/Inferno` and being told, honestly, no.
+    ///
+    /// So a failed check repeats the whole preparation rather than the check:
+    /// after a reset the variables are as likely to be missing as wrong.
+    private func prepareDestination(_ shell: GuestShell, heard: inout Bool) -> Bool {
         // The storage folder itself may not exist yet — the Files app creates it
         // the first time something is saved locally, and on a fresh guest that
         // has never happened. The group container is always there, though, and
         // says what it belongs to in its own metadata, so that is what is looked
         // for. Failing everything, the old place, which at least works.
-        shell.send("A=/var/mobile/Containers/Shared/AppGroup\n")
-        shell.send("G=$(grep -l LocalStorage $A/*/.com.apple*.plist 2>/dev/null|head -1)\n")
-        shell.send("[ -n \"$G\" ] && F=\"${G%/*}/File Provider Storage\" || F=/var/mobile\n")
-        shell.send("mkdir -p \"$F/Inferno\"\n")
-        try shell.requireAnswer("test -d \"$F/Inferno\" && echo 1 || echo 0")
+        //
+        // The `grep` walks every app group on the phone, which is the slow one;
+        // the rest are instant, and are given room only in case the guest is
+        // busy when they arrive.
+        let steps: [(String, TimeInterval)] = [
+            ("A=/var/mobile/Containers/Shared/AppGroup", 30),
+            ("G=$(grep -l LocalStorage $A/*/.com.apple*.plist 2>/dev/null|head -1)", 180),
+            ("[ -n \"$G\" ] && F=\"${G%/*}/File Provider Storage\" || F=/var/mobile", 30),
+            ("mkdir -p \"$F/Inferno\"", 60),
+        ]
+        for (command, timeout) in steps {
+            guard shell.line(command, timeout: timeout) != nil else { return false }
+            heard = true
+        }
+        guard let answer = shell.number("test -d \"$F/Inferno\" && echo 1 || echo 0") else { return false }
+        heard = true
+        return answer == 1
     }
 
     // MARK: - From the guest
 
     /// Returns where the file was saved on the phone.
     func receive(_ remote: String, progress: @escaping (Int64, Int64) -> Void) throws -> URL {
-        try requireNetwork()
-        return try serial.exclusive { try receiveExclusively(remote, progress: progress) }
+        try serial.exclusive { try receiveExclusively(remote, progress: progress) }
     }
 
     private func receiveExclusively(_ remote: String, progress: @escaping (Int64, Int64) -> Void) throws -> URL {
@@ -177,6 +259,23 @@ final class GuestFiles {
         do { out = try FileHandle(forWritingTo: partial) }
         catch { throw Failure.io(error.localizedDescription) }
 
+        // The namespace carries it whole, and checks it, without the console or
+        // the network being involved in the bytes at all.
+        if let fast = fastChannel(shell, note: { _ in }) {
+            do {
+                try fast.receive(quote(remote), to: partial, shell: shell, progress: progress)
+                try? out.close()
+                do { try fm.moveItem(at: partial, to: destination) }
+                catch { throw Failure.io(error.localizedDescription) }
+                return destination
+            } catch {
+                try? out.close()
+                try? fm.removeItem(at: partial)
+                throw error
+            }
+        }
+
+        try requireNetwork()
         let listener = try LoopbackListener()
         shell.send("cat \(quote(remote))>/dev/tcp/\(Self.hostAddress)/\(listener.port)\n")
         guard let conn = listener.accept(timeout: 60) else {
@@ -297,7 +396,7 @@ final class GuestFiles {
 /// can produce. The marker is assembled from shell variables, so the echo of the
 /// command shows `$v$t` while the answer shows `VAL1a2b` — the two can never be
 /// mistaken for each other.
-private final class GuestShell {
+final class GuestShell {
     private let serial: SerialConsole
     private let lock = NSLock()
     private var buffer = Data()
@@ -356,6 +455,33 @@ private final class GuestShell {
     func number(_ expression: String, timeout: TimeInterval = 30) -> Int64? {
         let tag = String(format: "%04x", UInt16.random(in: 0...UInt16.max))
         send("v=VAL; t=\(tag); echo \"$v$t $(\(expression))\"\n")
+        guard let rest = wait(for: "VAL" + tag, timeout: timeout),
+              let first = rest.split(separator: " ").first
+        else { return nil }
+        return Int64(first)
+    }
+
+    /// Runs a command and hands back its exit status, with the output thrown
+    /// away. The command must not end in a pipe: the status would then be the
+    /// last stage's, and `head` succeeds however badly the command before it
+    /// failed.
+    func run(_ command: String, timeout: TimeInterval = 120) -> Int64? {
+        number("{ \(command) ;} >/dev/null 2>&1; echo $?", timeout: timeout)
+    }
+
+    /// Runs a line in the shell itself and hands back its exit status.
+    ///
+    /// `run` cannot do this: its command substitution is a child shell, so a
+    /// variable set there dies with it. Here the marker rides on the same line
+    /// as the work, which is what makes the waiting safe — nothing of ours is
+    /// left sitting in the terminal while the guest is busy, and the console
+    /// loses bytes only from what sits there.
+    @discardableResult
+    func line(_ command: String, timeout: TimeInterval = 120) -> Int64? {
+        let tag = String(format: "%04x", UInt16.random(in: 0...UInt16.max))
+        // The status is caught before anything else runs, or it would be the
+        // status of the assignment right after it — which is always success.
+        send("\(command); s=$?; v=VAL; t=\(tag); echo \"$v$t $s\"\n")
         guard let rest = wait(for: "VAL" + tag, timeout: timeout),
               let first = rest.split(separator: " ").first
         else { return nil }

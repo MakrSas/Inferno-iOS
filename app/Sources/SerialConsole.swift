@@ -24,11 +24,21 @@ final class SerialConsole: ObservableObject {
     /// said once rather than twice a second forever.
     private var quiet = false
 
+    /// Bytes a second the guest is pouring into the console, for the counter
+    /// under the screen.
+    @Published private(set) var consoleRate: Double = 0
+    private let rateLock = NSLock()
+    private var rateBytes = 0
+    private var rateSince = Date()
+
     private var handle: FileHandle?
     private var timer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "inferno.serial")
     /// A long boot produces a lot; keep the tail.
     private let limit = 256 * 1024
+    /// How much of the emulator's console log is allowed to sit on disk.
+    private let logLimit: Int64 = 64 * 1024 * 1024
+    private var lastTrim = Date.distantPast
 
     private var url: URL { VMConfig.guestConsoleLog }
 
@@ -91,10 +101,30 @@ final class SerialConsole: ObservableObject {
     }
 
     private func deliver(_ data: Data) {
+        count(data.count)
         tapsLock.lock()
         let handlers = Array(taps.values)
         tapsLock.unlock()
         handlers.forEach { $0(data) }
+    }
+
+    /// Keeps the console's flow rate, published once a second.
+    ///
+    /// It belongs next to the frame counter. A guest that has been up for a
+    /// while can pour tens of megabytes a second of kernel log down this pipe —
+    /// every line of it formatted by the emulated cores, which are the same
+    /// cores that have to draw the screen. When that number is large, nothing
+    /// else about the frame rate is worth reading.
+    private func count(_ bytes: Int) {
+        rateLock.lock()
+        rateBytes += bytes
+        let elapsed = Date().timeIntervalSince(rateSince)
+        guard elapsed >= 1 else { rateLock.unlock(); return }
+        let rate = Double(rateBytes) / elapsed
+        rateBytes = 0
+        rateSince = Date()
+        rateLock.unlock()
+        DispatchQueue.main.async { self.consoleRate = rate }
     }
 
     /// Keeps a reader on the console socket for as long as the machine runs.
@@ -173,7 +203,28 @@ final class SerialConsole: ObservableObject {
         text = ""
     }
 
+    /// Keeps the emulator's own console log from eating the phone.
+    ///
+    /// The log is `-chardev …,logfile=` — the emulator writes it, nobody
+    /// rotates it. A guest in its first ten minutes pours tens of megabytes a
+    /// second down the console: measured on the rig, four gigabytes before it
+    /// settles, and on the phone that lands in the app's Documents.
+    ///
+    /// Cutting the file to nothing leaves the emulator writing where it left
+    /// off, so the length stays and the front becomes a hole. The space comes
+    /// back, and this reader — which finishes every poll at the end of the
+    /// file — never reads into the hole.
+    private func trimIfHuge() {
+        guard Date().timeIntervalSince(lastTrim) >= 5 else { return }
+        lastTrim = Date()
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return }
+        guard Int64(info.st_blocks) * 512 > logLimit else { return }
+        _ = truncate(url.path, 0)
+    }
+
     private func poll() {
+        trimIfHuge()
         if handle == nil {
             guard FileManager.default.fileExists(atPath: url.path),
                   let opened = try? FileHandle(forReadingFrom: url)

@@ -63,6 +63,9 @@ enum L10n {
         "%.0f КБ": "%.0f KB",
         "%.1f МБ": "%.1f MB",
         "%@ за %.1f с · %.0f КБ/с": "%@ in %.1f s · %.0f KB/s",
+        "%.1f МБ/с": "%.1f MB/s",
+        "%.0f КБ/с": "%.0f KB/s",
+        "%.0f Б/с": "%.0f B/s",
         "%@ из %@": "%@ of %@",
         "%d МБ": "%d MB",
         "Нет такого файла в госте: %@": "No such file in the guest: %@",
@@ -71,6 +74,8 @@ enum L10n {
 
         "Гость не подключился к приложению: команда не дошла или сеть не работает.": "The guest never connected to the app: the command did not arrive or the network is down.",
         "Шелл гостя не отвечает. Передача файлов работает только с бутстрапом, где на консоли сидит bash.": "The guest's shell is not answering. File transfer needs the bootstrap with bash on the console.",
+        "Не удалось подготовить папку для файлов в госте: он слишком занят. Попробуйте ещё раз.":
+            "The folder for files could not be made ready in the guest: it is too busy. Try again.",
         "Сеть в госте не поднялась. Нажмите «Поднять сеть в госте» и попробуйте снова.": "The guest's network did not come up. Tap “Bring the network up in the guest” and try again.",
         "Включите «Интернет через USB» в параметрах: файлы идут по той же сети.": "Turn on “Internet over USB” in the settings: files travel over the same network.",
         "Файл появится в папке Guest приложения — её видно в «Файлах».": "The file will appear in the app's Guest folder, visible in the Files app.",
@@ -104,8 +109,22 @@ enum L10n {
         "Вид": "View",
         "Сеть: консоль занята, попрошу позже.": "Network: the console is busy, will ask later.",
         "Счётчик кадров": "Frame counter",
-        "Под экраном гостя, для интереса: сколько кадров он успел нарисовать за секунду. Считаются те, что дошли до приложения.":
-            "Under the guest's screen, for the fun of it: how many frames it managed in the last second. Counted as they reach the app.",
+        "Панель": "Panel",
+        "Звук": "Sound",
+        "Звук гостя (опыт)": "The guest's sound (experimental)",
+        "Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Услышать пока нечего: в эмулируемой машине не хватает звукового сопроцессора, через который iOS выводит на динамик, — поэтому гость в эту дорожку ничего не шлёт. Тумблер есть, чтобы проверять сторону телефона, пока делается сторона машины. Применяется при запуске машины.":
+            "Sound output on the phone: its own path through an audio unit, which neither silences whatever else is playing nor spoils the Bluetooth headset profile. There is nothing to hear yet: the emulated machine is missing the audio coprocessor iOS drives the speaker through, so the guest sends nothing down this path. The switch is here to test the phone's half while the machine's half is built. Applied when the machine starts.",
+        "Здесь лежит весь код гостя, переведённый в код телефона. Когда он не помещается, буфер сбрасывается целиком и ядра переводят всё заново вместо того, чтобы исполнять. Замерено на телефоне: при 64 МБ гость выдавал 8–11 кадров в секунду, при 256 — 21–25, причём на большей панели. Большее не бесплатно: буфер живёт в тех же трёх гигабайтах, что и память гостя. Если приложение перестанет запускаться — верните шаг назад.":
+            "This holds all of the guest's code, translated into the phone's. When it does not fit, the buffer is thrown away whole and the cores translate everything again instead of running it. Measured on the phone: at 64 MB the guest managed 8–11 frames a second, at 256 it managed 21–25, and on a larger panel at that. More is not free: the buffer lives in the same three gigabytes as the guest's memory. If the app stops starting, step back down.",
+        "Размер": "Size",
+        "%d×%d, точек %d×%d": "%d×%d, %d×%d points",
+        "Экран гостя рисуется без графического ускорителя — каждый кадр собирают эмулируемые ядра, и платят они за каждый пиксель. Панель поменьше — меньше работы: у iPhone 8 пикселей на треть меньше, чем у iPhone 11, у SE — вдвое. Чёткость при этом не страдает: масштаб везде двукратный, ресурсы iOS берёт те же, интерфейс просто становится интерфейсом телефона поменьше. Применяется при запуске машины.":
+            "The guest's screen is drawn with no graphics accelerator — the emulated cores assemble every frame, and they pay for every pixel. A smaller panel is less work: the iPhone 8 has a third fewer pixels than the iPhone 11, the SE half as many. Sharpness does not suffer: the scale stays at two everywhere, iOS uses the same artwork, and the interface simply becomes that of a smaller phone. Applied when the machine starts.",
+        "Ядрам гостя — быстрые ядра телефона": "Fast phone cores for the guest's cores",
+        "Потоки эмулируемых ядер просят у iOS высший класс обслуживания. Без этого они получают обычный, и телефон вправе увести их на энергоэффективные ядра. Применяется при запуске машины.":
+            "The threads running the emulated cores ask iOS for the highest quality of service. Without it they get the default one, and the phone is free to move them to the efficiency cores. Applied when the machine starts.",
+        "Под экраном гостя: сколько кадров он успел нарисовать за секунду — считаются дошедшие до приложения, — и сколько он льёт в консоль. Второе число важнее, чем кажется: пока гость печатает мегабайты в секунду, его ядра заняты этим, а не картинкой.":
+            "Under the guest's screen: how many frames it managed in the last second, counted as they reach the app, and how much it is pouring into the console. The second number matters more than it looks: while the guest prints megabytes a second, its cores are busy with that rather than with the picture.",
         "Сеть: гость погасил связь.": "Network: the guest took the link down.",
         "Кнопки: экран не подключён, нажатие некуда отправить.":
             "Buttons: no screen attached, nowhere to send the press.",
@@ -276,6 +295,47 @@ enum L10n {
         "  адрес не меняется — поток стоит на одной инструкции":
             "  the address does not move — the thread is stuck on one instruction",
         "Аргументы:\n  ": "Arguments:\n  ",
+
+        // Installing an .ipa into the guest
+        "Установить .ipa в гостя…": "Install an .ipa in the guest…",
+        "Это не .ipa: внутри нет оглавления zip.": "That is not an .ipa: there is no zip directory inside.",
+        "В архиве есть то, что я не умею разбирать: %@":
+            "The archive holds something I cannot read: %@",
+        "Архив повреждён: %@": "The archive is damaged: %@",
+        "способ сжатия %d": "compression method %d",
+        "В .ipa нет папки Payload — это не приложение.":
+            "The .ipa has no Payload folder — that is not an app.",
+        "В Payload нет ни одного .app.": "There is no .app inside Payload.",
+        "Шелл гостя не отвечает. Установка работает только с бутстрапом, где на консоли сидит bash.":
+            "The guest's shell does not answer. Installing needs the bootstrap, with bash on the console.",
+        "Шаг «%@» в госте вернул %d.": "The step “%@” returned %d in the guest.",
+        "Не удалось занести помощника в гостя: %@":
+            "Could not put the helper into the guest: %@",
+        "в приложении его нет": "it is not in the app",
+        "не удалось сделать исполняемым": "it could not be made executable",
+        "Распаковываю .ipa…": "Unpacking the .ipa…",
+        "Канал: USB-сеть.": "Channel: the USB network.",
+        "Канал: NVMe, %@.": "Channel: NVMe, %@.",
+        "Ставлю помощника в гостя — это один раз…":
+            "Putting the helper into the guest — this happens once…",
+        "перемонтирую корень": "remounting the root",
+        "убираю прежнюю копию": "removing the previous copy",
+        "распаковываю": "unpacking",
+        "права": "permissions",
+        "показываю SpringBoard": "telling SpringBoard",
+        "прибираю": "tidying up",
+        "проверка": "the check",
+        "чтение носителя": "reading the namespace",
+        "Нужен файл .ipa.": "An .ipa file is needed.",
+        "Установлено: %@": "Installed: %@",
+        "→ установка %@": "→ installing %@",
+        "помощника нет в приложении": "the helper is not in the app",
+        "помощника не удалось сделать исполняемым": "the helper could not be made executable",
+        "гость не прочитал носитель (%d)": "the guest did not read the namespace (%d)",
+        "гость не записал носитель (%d)": "the guest did not write the namespace (%d)",
+        "в госте %@ Б, у нас %d Б": "%@ bytes in the guest, %d here",
+        "Приложению нужна iOS %d, а в госте iOS %d — оно встало, но не запустится.":
+            "The app needs iOS %d and the guest is iOS %d — it is installed, but will not launch.",
     ]
 
     static func string(_ russian: String) -> String {

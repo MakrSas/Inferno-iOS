@@ -39,10 +39,15 @@ pkg-config = 'pkg-config'
 
 [built-in options]
 c_args        = [$FLAGS, '-I$PREFIX/include']
-c_link_args   = [$FLAGS, '-L$PREFIX/lib', '-framework', 'CoreFoundation']
+c_link_args   = [$FLAGS, '-L$PREFIX/lib', '-framework', 'CoreFoundation', '-lucontext']
 cpp_args      = [$FLAGS]
 cpp_link_args = [$FLAGS]
 objc_args     = [$FLAGS]
+# Needed as soon as one Objective-C file joins a target: meson then links
+# that target with the Objective-C linker, and an empty list here means
+# clang falls back to the host — it builds for macOS and then refuses the
+# iOS objects it is given.
+objc_link_args = [$FLAGS, '-L$PREFIX/lib', '-framework', 'CoreFoundation', '-lucontext']
 prefix        = '$PREFIX'
 
 [host_machine]
