@@ -347,6 +347,8 @@ enum L10n {
         "Поиск пакета": "Search for a package",
         "Читаю %@…": "Reading %@…",
         "Качаю %@…": "Downloading %@…",
+        "%@ — %d%%": "%@ — %d%%",
+        "%@ — %d КБ": "%@ — %d KB",
         "Пусто. Потяните вниз, чтобы прочитать источники.": "Empty. Pull down to read the sources.",
         "Репозиторий не отдал файл (%d).": "The repository did not give the file (%d).",
         "https://адрес.репозитория/": "https://repository.address/",

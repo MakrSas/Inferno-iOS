@@ -131,6 +131,14 @@ struct VMConfig {
             "sep-fw=\(data)/sep-firmware.n104.RELEASE.new.img4",
             "sep-rom=\(sep)",
             "kaslr-off=true",
+            // The machine boots whatever NVRAM says, and NVRAM can say
+            // `auto-boot=false` — left there by a restore that did not finish.
+            // Then it heads for recovery, wants a ramdisk nobody passed, and
+            // the emulator quits with `RAM Disk required for recovery` before
+            // the guest exists. This app only ever runs an installed system, so
+            // it asks for the way out of recovery every time: on a machine that
+            // was fine this changes nothing.
+            "boot-mode=exit_recovery",
             "disp-width=\(displayWidth)",
             "disp-height=\(displayHeight)",
             "disp-scale=\(displayScale)",

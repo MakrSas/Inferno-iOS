@@ -101,13 +101,12 @@ final class RepoStore: ObservableObject {
 
     /// Reads one repository's index.
     ///
-    /// Three names are tried in turn. `Packages` plain is rare but costs one
-    /// request; `Packages.gz` is what nearly everything serves. `.bz2` and
-    /// `.zst`, which some newer repositories use, are left alone: neither has a
-    /// decompressor on iOS, and guessing at one here would be a lot of code for
-    /// a handful of sources.
+    /// Three names are tried in turn: `.bz2` first, because the older
+    /// repositories publish only that, then `.gz`, then the plain file. `.zst`,
+    /// which a few of the newest use, is left alone — iOS has no decompressor
+    /// for it and carrying one would be a lot of code for a handful of sources.
     private static func fetch(_ repo: URL) async throws -> [RepoPackage] {
-        for name in ["Packages.gz", "Packages"] {
+        for name in ["Packages.bz2", "Packages.gz", "Packages"] {
             guard let url = URL(string: name, relativeTo: repo) else { continue }
             var request = URLRequest(url: url)
             request.setValue("Telesphoreo APT-HTTP/1.0.592", forHTTPHeaderField: "User-Agent")
@@ -120,7 +119,11 @@ final class RepoStore: ObservableObject {
             else { continue }
 
             let text: Data
-            if name.hasSuffix(".gz") {
+            if name.hasSuffix(".bz2") {
+                guard let unpacked = Bzip2.decompress(data) else { continue }
+                text = unpacked
+            }
+            else if name.hasSuffix(".gz") {
                 guard let unpacked = Gzip.inflate(data) else { continue }
                 text = unpacked
             }
@@ -174,6 +177,45 @@ final class RepoStore: ObservableObject {
         }
         flush()
         return out
+    }
+}
+
+/// bzip2, borrowed from the system.
+///
+/// iOS ships libbz2 but does not declare it, so the one function needed is
+/// looked up by hand. The older repositories — bingner's and BigBoss's among
+/// them — publish their index only as `.bz2`, and without this they simply do
+/// not open.
+enum Bzip2 {
+    private typealias Decompress = @convention(c) (
+        UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<UInt32>?,
+        UnsafeMutablePointer<CChar>?, UInt32, Int32, Int32) -> Int32
+
+    static func decompress(_ data: Data) -> Data? {
+        guard data.count > 4, data[0] == 0x42, data[1] == 0x5A, data[2] == 0x68 else { return nil }
+        guard let library = dlopen("/usr/lib/libbz2.1.0.dylib", RTLD_LAZY) ?? dlopen("libbz2.1.0.dylib", RTLD_LAZY),
+              let symbol = dlsym(library, "BZ2_bzBuffToBuffDecompress")
+        else { return nil }
+
+        let call = unsafeBitCast(symbol, to: Decompress.self)
+        // An index compresses well; when the guess is short bzip2 says so and
+        // the room is doubled rather than given up on.
+        var capacity = max(data.count * 12, 1 << 20)
+        for _ in 0..<5 {
+            var written = UInt32(capacity)
+            var out = Data(count: capacity)
+            let status: Int32 = out.withUnsafeMutableBytes { target in
+                data.withUnsafeBytes { source in
+                    call(target.baseAddress?.assumingMemoryBound(to: CChar.self), &written,
+                         UnsafeMutablePointer(mutating: source.baseAddress?.assumingMemoryBound(to: CChar.self)),
+                         UInt32(data.count), 0, 0)
+                }
+            }
+            if status == 0 { return out.prefix(Int(written)) }
+            guard status == -8 else { return nil }    // BZ_OUTBUFF_FULL
+            capacity *= 2
+        }
+        return nil
     }
 }
 

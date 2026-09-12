@@ -107,12 +107,40 @@ struct PackagesView: View {
         Task {
             defer { downloading = nil }
             do {
-                let (file, response) = try await URLSession.shared.download(from: url)
+                // Streamed rather than fetched in one call, for two reasons: a
+                // repository that stops answering half way is otherwise
+                // indistinguishable from a slow one, and a download with no
+                // number next to it looks stuck even when it is not.
+                var request = URLRequest(url: url)
+                request.setValue("Telesphoreo APT-HTTP/1.0.592", forHTTPHeaderField: "User-Agent")
+                request.setValue("iPhone12,1", forHTTPHeaderField: "X-Machine")
+                request.setValue("14.0", forHTTPHeaderField: "X-Firmware")
+                request.timeoutInterval = 60
+
+                let (stream, response) = try await URLSession.shared.bytes(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     complaint = L("Репозиторий не отдал файл (%d).",
                                   (response as? HTTPURLResponse)?.statusCode ?? 0)
                     return
                 }
+
+                let expected = max(response.expectedContentLength, package.size)
+                var body = Data()
+                body.reserveCapacity(Int(max(expected, 0)))
+                var shown = Date.distantPast
+                for try await byte in stream {
+                    body.append(byte)
+                    if Date().timeIntervalSince(shown) > 0.2 {
+                        shown = Date()
+                        downloading = expected > 0
+                            ? L("%@ — %d%%", package.name, Int(Int64(body.count) * 100 / expected))
+                            : L("%@ — %d КБ", package.name, body.count / 1024)
+                    }
+                }
+                let file = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("download.deb")
+                try? FileManager.default.removeItem(at: file)
+                try body.write(to: file)
                 // Named after the package: dpkg does not care, but the banner
                 // and the log do, and `CFNetworkDownload_xxx.tmp` tells nobody
                 // anything.
