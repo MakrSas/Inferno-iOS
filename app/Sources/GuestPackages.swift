@@ -100,17 +100,20 @@ enum GuestPackages {
         "        mapfile -t args < \"$req\"",
         "        rm -f \"$req\"",
         "        printf %s\\\\n \"--- $id\" \"${args[@]}\" >> \"$queue/args.log\"",
-        // apt hands dpkg an open file descriptor to report progress on. It
-        // cannot cross into this process, and dpkg refuses to start without
-        // the one it was told about, so those arguments are dropped: apt then
-        // shows no progress bar and everything else works.
+        // apt hands dpkg an open file descriptor to report progress on, and it
+        // cannot cross into this process. dpkg is pointed at a file instead,
+        // which the client pours into apt's own descriptor — otherwise apt
+        // counts nothing as done and says so: `planned for dpkg to do more
+        // than it reported back (0 vs 5)`.
         "        keep=()",
         "        skip=0",
         "        for a in \"${args[@]}\"; do",
         "            if [ $skip = 1 ]; then skip=0; continue; fi",
         "            case \"$a\" in",
-        "                --status-fd|--log-fd) skip=1; continue;;",
-        "                --status-fd=*|--log-fd=*) continue;;",
+        "                --status-fd) skip=1; keep+=(--status-fd 9); continue;;",
+        "                --status-fd=*) keep+=(--status-fd 9); continue;;",
+        "                --log-fd) skip=1; continue;;",
+        "                --log-fd=*) continue;;",
         "            esac",
         "            keep+=(\"$a\")",
         "        done",
@@ -129,7 +132,7 @@ enum GuestPackages {
         "                : > \"$id.out\"",
         "                ;;",
         "            /*) \"${keep[@]}\" > \"$id.out\" 2>&1;;",
-        "            *)  /usr/bin/dpkg \"${keep[@]}\" > \"$id.out\" 2>&1;;",
+        "            *)  /usr/bin/dpkg \"${keep[@]}\" > \"$id.out\" 2>&1 9> \"$id.status\";;",
         "        esac",
         "        echo $? > \"$id.rc\"",
         "    done",
@@ -156,19 +159,38 @@ enum GuestPackages {
         "    exit 2",
         "fi",
         "id=\"$queue/$$-$RANDOM\"",
+        // apt reads dpkg's progress off a descriptor it opened itself. The work
+        // happens in another process, so the descriptor is found here and the
+        // helper's report is poured into it.
+        "fd=\"\"",
+        "prev=\"\"",
+        "for a in \"$@\"; do",
+        "    case \"$prev\" in --status-fd) fd=\"$a\";; esac",
+        "    case \"$a\" in --status-fd=*) fd=\"${a#--status-fd=}\";; esac",
+        "    prev=\"$a\"",
+        "done",
         "printf %s\\\\n \"$@\" > \"$id.tmp\"",
-        "touch \"$id.out\"",
+        "touch \"$id.out\" \"$id.status\"",
         "mv \"$id.tmp\" \"$id.req\"",
         "tail -n +1 -f \"$id.out\" 2>/dev/null &",
         "tail_pid=$!",
+        "status_pid=0",
+        // Only when it is really open: apt's descriptor is, but anyone calling
+        // cydo by hand leaves it closed, and tail then says so on Cydia's
+        // screen for no reason.
+        "if [ -n \"$fd\" ] && { : >&\"$fd\"; } 2>/dev/null; then",
+        "    tail -n +1 -f \"$id.status\" >&\"$fd\" 2>/dev/null &",
+        "    status_pid=$!",
+        "fi",
         "for _ in $(seq 1 3600); do",
         "    [ -e \"$id.rc\" ] && break",
         "    sleep 1",
         "done",
         "sleep 1",
         "kill \"$tail_pid\" 2>/dev/null",
+        "[ \"$status_pid\" != 0 ] && kill \"$status_pid\" 2>/dev/null",
         "rc=$(cat \"$id.rc\" 2>/dev/null || echo 2)",
-        "rm -f \"$id.out\" \"$id.rc\"",
+        "rm -f \"$id.out\" \"$id.rc\" \"$id.status\"",
         "exit \"$rc\"",
     ]
 
@@ -375,7 +397,7 @@ enum GuestPackages {
                 // waiting on them any more.
                 "mkdir -p \(queue)",
                 "chmod 777 \(queue)",
-                "rm -f \(queue)/*.req \(queue)/*.out \(queue)/*.rc \(queue)/*.tmp",
+                "rm -f \(queue)/*.req \(queue)/*.out \(queue)/*.rc \(queue)/*.tmp \(queue)/*.status",
                 "pkill -f cydo-root.sh",
                 // In a subshell, and nothing after it on the line: a bare `&`
                 // with the marker appended behind it is a syntax error, and
