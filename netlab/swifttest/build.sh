@@ -31,6 +31,7 @@ mkdir -p "$HERE/guest-tools"
 xcrun swiftc -O \
     "$SRC/Archive.swift" "$SRC/Sock.swift" "$SRC/SerialConsole.swift" \
     "$SRC/GuestFiles.swift" "$SRC/GuestChannel.swift" "$SRC/GuestInstaller.swift" \
+    "$SRC/GuestPackages.swift" \
     "$HERE/main.swift" -o "$HERE/swifttest"
 
 echo "готово: $HERE/swifttest"

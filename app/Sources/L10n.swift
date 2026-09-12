@@ -112,8 +112,8 @@ enum L10n {
         "Панель": "Panel",
         "Звук": "Sound",
         "Звук гостя (опыт)": "The guest's sound (experimental)",
-        "Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Услышать пока нечего: в эмулируемой машине не хватает звукового сопроцессора, через который iOS выводит на динамик, — поэтому гость в эту дорожку ничего не шлёт. Тумблер есть, чтобы проверять сторону телефона, пока делается сторона машины. Применяется при запуске машины.":
-            "Sound output on the phone: its own path through an audio unit, which neither silences whatever else is playing nor spoils the Bluetooth headset profile. There is nothing to hear yet: the emulated machine is missing the audio coprocessor iOS drives the speaker through, so the guest sends nothing down this path. The switch is here to test the phone's half while the machine's half is built. Applied when the machine starts.",
+        "Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Тумблер описывает машине звуковое железо — динамик, шину I2S и сопроцессор, — а без него гостю о звуке не сообщается вовсе. Пока опыт: гость собирает звуковое устройство, но маршрут вывода у него ещё не встаёт, и машина от этих драйверов заметно тяжелеет. Применяется при запуске машины.":
+            "Sound output on the phone: its own path through an audio unit, which neither silences whatever else is playing nor spoils the Bluetooth headset profile. The switch describes the audio hardware to the machine — the speaker, the I2S bus and the coprocessor — and without it the guest is told nothing about sound at all. Still an experiment: the guest builds an audio device, but its output route does not come up yet, and those drivers make the machine noticeably heavier. Applied when the machine starts.",
         "Здесь лежит весь код гостя, переведённый в код телефона. Когда он не помещается, буфер сбрасывается целиком и ядра переводят всё заново вместо того, чтобы исполнять. Замерено на телефоне: при 64 МБ гость выдавал 8–11 кадров в секунду, при 256 — 21–25, причём на большей панели. Большее не бесплатно: буфер живёт в тех же трёх гигабайтах, что и память гостя. Если приложение перестанет запускаться — верните шаг назад.":
             "This holds all of the guest's code, translated into the phone's. When it does not fit, the buffer is thrown away whole and the cores translate everything again instead of running it. Measured on the phone: at 64 MB the guest managed 8–11 frames a second, at 256 it managed 21–25, and on a larger panel at that. More is not free: the buffer lives in the same three gigabytes as the guest's memory. If the app stops starting, step back down.",
         "Размер": "Size",
@@ -336,6 +336,31 @@ enum L10n {
         "в госте %@ Б, у нас %d Б": "%@ bytes in the guest, %d here",
         "Приложению нужна iOS %d, а в госте iOS %d — оно встало, но не запустится.":
             "The app needs iOS %d and the guest is iOS %d — it is installed, but will not launch.",
+
+        "Починить менеджер пакетов": "Repair the package manager",
+        "Чиню менеджер пакетов…": "Repairing the package manager…",
+        "Менеджер пакетов починен. Попробуйте Cydia снова.":
+            "The package manager is repaired. Try Cydia again.",
+        "Пакеты: чиню dpkg в госте…": "Packages: repairing dpkg in the guest…",
+        "Пакеты: готово.": "Packages: done.",
+        "Пакеты: не вышло — %@": "Packages: failed — %@",
+        "Гость не отвечает на консоли — дождитесь загрузки и повторите.":
+            "The guest is not answering on the console — wait for it to boot and try again.",
+        "Шаг «%@» не ответил вовремя.": "The step “%@” did not answer in time.",
+        "Корень гостя остался только для чтения — пакеты писать некуда.":
+            "The guest's root is still read-only — there is nowhere for packages to be written.",
+        "Перемонтирую корень на запись": "Remounting the root writable",
+        "Готовлю папки apt": "Making apt's folders",
+        "Ставлю ссылку на базу dpkg": "Linking dpkg's database",
+        "Регистрирую прошивку": "Registering the firmware",
+        "Настраиваю пакеты": "Configuring the packages",
+        "«%@» не ответил вовремя.": "“%@” did not answer in time.",
+        "«%@» вернул %d.": "“%@” returned %d.",
+        "Проверяю…": "Checking…",
+        "Проверяю базу": "Auditing the database",
+        "dpkg сказал: %@": "dpkg said: %@",
+        "База dpkg на месте не найдена — Cydia может всё ещё ругаться.":
+            "dpkg's database was not found where it belongs — Cydia may still complain.",
     ]
 
     static func string(_ russian: String) -> String {

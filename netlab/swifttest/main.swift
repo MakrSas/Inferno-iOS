@@ -32,6 +32,10 @@ do {
         let target = try GuestInstaller(serial: serial, files: files)
             .install(ipa: ipa, progress: { _, _ in }, note: { print("   \($0)") })
         print(String(format: "УСТАНОВЛЕНО: %@ за %.1f с", target, Date().timeIntervalSince(t0)))
+    } else if mode == "packages" {
+        print("== чиню менеджер пакетов")
+        let complaints = try GuestPackages.repair(serial: serial, note: { print("   \($0)") })
+        print(complaints.isEmpty ? "== готово, замечаний нет" : "== готово: " + complaints.joined(separator: "; "))
     } else if mode == "send" {
         // Тот самый путь, которым идёт «Отправить файл в гостя…» на телефоне:
         // через openDestination, то есть через поиск папки «Файлов» в госте.

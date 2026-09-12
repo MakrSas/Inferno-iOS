@@ -236,6 +236,38 @@ final class VMModel: ObservableObject {
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
     }
 
+    /// Puts the guest's package manager back together — the fix for Cydia's
+    /// `cydo returned an error code (2)`.
+    ///
+    /// Offered as a button rather than done at every boot because it writes to
+    /// the guest's own system volume; the part that does not survive a reboot
+    /// is the remount, so pressing it again after one is normal.
+    func repairPackages() {
+        guard isRunning, transfer?.isRunning != true else { return }
+        transfer = .running(title: L("Чиню менеджер пакетов…"), done: 0, total: 0)
+        LogCapture.shared.note(L("Пакеты: чиню dpkg в госте…"))
+        let serial = self.serial
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let complaints = try GuestPackages.repair(serial: serial, note: { line in
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: line, done: 0, total: 0)
+                    }
+                })
+                let tail = complaints.isEmpty ? "" : "\n" + complaints.joined(separator: "\n")
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Менеджер пакетов починен. Попробуйте Cydia снова.") + tail)
+                    LogCapture.shared.note(L("Пакеты: готово.") + tail)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note(L("Пакеты: не вышло — %@", error.localizedDescription))
+                }
+            }
+        }
+    }
+
     /// Watches the link and, if it never comes up, uses the guest's own shell.
     ///
     /// Spread out on purpose: on a phone the guest can be four minutes from
@@ -661,6 +693,10 @@ struct ControlMenu: View {
                     model.fixNetwork()
                 }
                 .disabled(!model.isRunning)
+                Button(L("Починить менеджер пакетов"), systemImage: "shippingbox") {
+                    model.repairPackages()
+                }
+                .disabled(!model.isRunning || model.transfer?.isRunning == true)
                 Button(role: .destructive) {
                     confirmQuit = true
                 } label: {
