@@ -230,6 +230,7 @@ enum GuestPackages {
             try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
 
+            try ensureWritable(shell)
             note(L("Переношу пакет в гостя…"))
             try files.carry(local, to: remote, shell: shell, progress: progress, note: note)
 
@@ -291,6 +292,7 @@ enum GuestPackages {
             let shell = GuestShell(serial: serial)
             try awaitShell(shell)
             shell.line(": > \(log)", timeout: 60)
+            try ensureWritable(shell)
             // Read before the removal: afterwards dpkg no longer knows what the
             // package owned.
             let apps = appPaths(of: package, shell: shell)
@@ -316,6 +318,22 @@ enum GuestPackages {
             if attempt < 9 { Thread.sleep(forTimeInterval: 5) }
         }
         throw Failure.noShell
+    }
+
+    /// Remounts the root writable, and makes sure it stayed that way.
+    ///
+    /// `mount -uw /` answers 0 and changes nothing when the guest is still
+    /// booting — iOS puts the root back read-only on its way up — so the answer
+    /// is not to be trusted and the mount table is read instead. Asked again
+    /// every ten seconds: whatever the guest is doing to it, it stops doing it
+    /// within a minute.
+    private static func ensureWritable(_ shell: GuestShell) throws {
+        for attempt in 0..<6 {
+            shell.line("mount -uw /", timeout: 120)
+            if shell.number("mount | grep -c ' on / .*read-only'") == 0 { return }
+            if attempt < 5 { Thread.sleep(forTimeInterval: 10) }
+        }
+        throw Failure.stillReadOnly
     }
 
     /// The `/Applications` entries a package owns, if any.
@@ -365,8 +383,6 @@ enum GuestPackages {
     /// again each time the machine starts. Seconds, not minutes.
     private static var fastSteps: [Step] {
         [
-            Step(title: L("Перемонтирую корень на запись"), command: "mount -uw /",
-                 timeout: 60, fatal: true),
             Step(title: L("Готовлю папки apt"),
                  command: "mkdir -p /var/lib /var/cache/apt/archives/partial /var/lib/apt/lists/partial",
                  timeout: 60, fatal: true),
@@ -413,6 +429,9 @@ enum GuestPackages {
             // commands would land in the boot log and look like they ran.
             try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno; : > \(log)", timeout: 60)
+
+            note(L("Перемонтирую корень на запись…"))
+            try ensureWritable(shell)
 
             for step in steps {
                 note(step.title + "…")
@@ -483,8 +502,8 @@ enum GuestPackages {
             }
 
             note(L("Проверяю…"))
-            // The one thing worth failing over: without a writable root the
-            // whole repair is theatre.
+            // Still worth asking at the end: the guest can put the root back
+            // while the slow steps are running.
             if shell.number("mount | grep -c ' on / .*read-only'") != 0 { throw Failure.stillReadOnly }
             if shell.number("test -e /var/lib/dpkg/status; echo $?") != 0 {
                 complaints.append(L("База dpkg на месте не найдена — Cydia может всё ещё ругаться."))

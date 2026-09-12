@@ -400,7 +400,10 @@ final class VMModel: ObservableObject {
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { attempt() }
+        // Not ten seconds in: the guest is still booting then, and it puts the
+        // root back read-only on its way up — the remount answered 0 and meant
+        // nothing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { attempt() }
     }
 
     /// Puts the guest's package manager back together — the fix for Cydia's

@@ -405,6 +405,7 @@ enum L10n {
         "Корень гостя остался только для чтения — пакеты писать некуда.":
             "The guest's root is still read-only — there is nowhere for packages to be written.",
         "Перемонтирую корень на запись": "Remounting the root writable",
+        "Перемонтирую корень на запись…": "Remounting the root writable…",
         "Готовлю папки apt": "Making apt's folders",
         "Ставлю ссылку на базу dpkg": "Linking dpkg's database",
         "Регистрирую прошивку": "Registering the firmware",
