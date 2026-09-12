@@ -139,7 +139,13 @@ final class VMModel: ObservableObject {
     func start() {
         refreshFiles()
         refreshJIT()
-        guard missing.isEmpty else { return }
+        // Said out loud, and into the log. The button is disabled in this case,
+        // so from outside it is "I press Start and nothing happens" — and the
+        // log people send with that report has nothing in it at all.
+        guard missing.isEmpty else {
+            LogCapture.shared.note(L("Запуск отменён: не хватает файлов — %@", missing.joined(separator: ", ")))
+            return
+        }
         // Starting without executable memory does not fail — it wedges the
         // vCPU on the first generated instruction, which is far harder to read
         // than a refusal.

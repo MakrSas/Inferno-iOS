@@ -104,13 +104,31 @@ struct VMConfig {
 
     static func missingFiles() -> [String] {
         var missing = requiredFiles.compactMap { entry -> String? in
-            let url = documents.appendingPathComponent(entry.relativePath)
-            return FileManager.default.fileExists(atPath: url.path) ? nil : entry.label
+            let url = documents.appendingPathComponent(entry.relativePath).resolvingSymlinksInPath()
+            return usable(url) ? nil : entry.label
         }
         if rootImage == nil {
             missing.insert(L("Диск устройства (root.qcow2 или root)"), at: 0)
         }
         return missing
+    }
+
+    /// Whether a file the emulator needs is actually a file.
+    ///
+    /// Asking `fileExists` is not enough, and the difference is not academic:
+    /// an unpacked archive can leave a *folder* named `firmware`, the check
+    /// passes, Start is enabled, and then QEMU says `'file' driver requires
+    /// '…/firmware' to be a regular file` and calls `exit(1)` — from inside
+    /// `qemu_init`, which runs in our own process, so the whole app goes down
+    /// and it looks like a crash. An empty file does the same. Reported as
+    /// issue #5.
+    private static func usable(_ url: URL) -> Bool {
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory),
+              !directory.boolValue
+        else { return false }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64
+        return (size ?? 0) > 0
     }
 
     func arguments() -> [String] {

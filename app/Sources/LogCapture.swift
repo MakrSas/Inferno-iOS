@@ -20,10 +20,22 @@ final class LogCapture: ObservableObject {
         VMConfig.documents.appendingPathComponent("emulator.log")
     }
 
+    /// The log from the run before this one.
+    ///
+    /// The interesting run is almost always the one that just died, and the
+    /// app is started again to find out why — which used to overwrite the only
+    /// copy of the evidence. Every crash report we were sent was from a session
+    /// where nothing had happened yet.
+    var previousLogFileURL: URL {
+        VMConfig.documents.appendingPathComponent("emulator.prev.log")
+    }
+
     func start() {
         guard !started else { return }
         started = true
 
+        try? FileManager.default.removeItem(at: previousLogFileURL)
+        try? FileManager.default.moveItem(at: logFileURL, to: previousLogFileURL)
         // Keep a copy on disk: the process may die before the UI updates.
         FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
         fileHandle = try? FileHandle(forWritingTo: logFileURL)

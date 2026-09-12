@@ -384,6 +384,7 @@ enum L10n {
             "The guest fell over and is rebooting; the command did not finish: %@",
         "Гостю нельзя: %@": "The guest cannot take it: %@",
         "Гость упал: %@": "The guest fell over: %@",
+        "Запуск отменён: не хватает файлов — %@": "Start refused: these files are missing — %@",
         "Всё равно установить": "Install it anyway",
         "Гость упал в панику — поднимаю менеджер пакетов заново, когда вернётся.":
             "The guest panicked; the package manager will be set up again once it is back.",
