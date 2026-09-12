@@ -1069,10 +1069,11 @@ struct TerminalView: View {
                         shell.connect()
                     }
                     .buttonStyle(.borderedProminent)
-                    // The console path needs no network at all, so it stays
-                    // offered even when the better one keeps failing.
-                    Button(L("Через консоль"), systemImage: "terminal") {
-                        shell.connectOverConsole()
+                    // The console is what the button above uses. This is the
+                    // other way round — worth offering when the kernel log is
+                    // noisy enough to get in the way.
+                    Button(L("Через сеть"), systemImage: "network") {
+                        shell.connectOverNetwork()
                     }
                     .buttonStyle(.bordered)
                 }

@@ -86,24 +86,57 @@ final class ShellChannel: ObservableObject {
     /// The network is not waited for and the guest is not asked to bring it up:
     /// something else in the app already watches the link and does the asking,
     /// and a second voice only produced a screenful of `ipconfig` lines.
+    /// Always over the console.
+    ///
+    /// The network path is still here and still works, but it cannot be relied
+    /// on: it needs the guest to have an address and to call back, and when
+    /// either does not happen there is no shell at all — which is how this
+    /// looked from the outside, as a channel that simply never came up. The
+    /// console is there from the moment the bootstrap's bash is, and that is
+    /// worth more than not sharing it with the kernel log.
     func connect() {
         guard state != .connecting, !isUp else { return }
-        guard serial.interactive else {
-            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
-            return
-        }
 
         state = .connecting
         generation += 1
         let mine = generation
         release()
         screen.reset()
+        waitForConsole(mine, attempt: 0)
+    }
 
-        guard linkUp() else {
-            openConsole(mine, note: L("Сети у гостя нет — шелл идёт по консоли."))
+    /// Waits for bash to appear on the console instead of giving up on it.
+    ///
+    /// On a phone the guest can be minutes from power-on to a shell, and the
+    /// old behaviour — one look, then an error — meant the pane stayed empty
+    /// for the rest of the session unless somebody pressed a button.
+    private func waitForConsole(_ mine: Int, attempt: Int) {
+        guard mine == generation else { return }
+        if serial.interactive {
+            openConsole(mine, note: nil)
             return
         }
-        openNetwork(mine)
+        guard attempt < 150 else {
+            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.waitForConsole(mine, attempt: attempt + 1)
+        }
+    }
+
+    /// Over the network instead: no sharing with the kernel log, at the price
+    /// of needing the guest to have an address and to call back.
+    func connectOverNetwork() {
+        guard serial.interactive else {
+            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
+            return
+        }
+        state = .connecting
+        generation += 1
+        release()
+        screen.reset()
+        openNetwork(generation)
     }
 
     /// Opens the channel over the console explicitly, whatever the link says.
