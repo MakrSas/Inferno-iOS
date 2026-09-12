@@ -42,6 +42,7 @@ enum GuestPackages {
         case step(String, Int64)
         case silent(String)
         case stillReadOnly
+        case crashed(String)
 
         var errorDescription: String? {
             switch self {
@@ -53,6 +54,8 @@ enum GuestPackages {
                 return L("Шаг «%@» не ответил вовремя.", what)
             case .stillReadOnly:
                 return L("Корень гостя остался только для чтения — пакеты писать некуда.")
+            case .crashed(let line):
+                return L("Гость упал и перезагружается, команда не доведена до конца: %@", line)
             }
         }
     }
@@ -244,18 +247,18 @@ enum GuestPackages {
         }
 
         note(L("Ставлю пакет…"))
-        guard let code = runDetached("dpkg -i --force-overwrite \(remote) >> \(log) 2>&1",
-                                     serial: serial, timeout: 1800)
+        guard let code = try runDetached("dpkg -i --force-overwrite \(remote) >> \(log) 2>&1",
+                                         serial: serial, timeout: 1800)
         else { throw Failure.silent(L("Ставлю пакет")) }
 
         note(L("Настраиваю пакеты…"))
-        runDetached("dpkg --configure -a >> \(log) 2>&1", serial: serial, timeout: 1800)
+        try runDetached("dpkg --configure -a >> \(log) 2>&1", serial: serial, timeout: 1800)
 
         // A package that brings an app leaves it on disk and nothing else:
         // SpringBoard learns about it from uicache. Only about this app, though
         // — `uicache --all` walks every app on the system, which on this guest
         // takes minutes with SpringBoard wedged for all of them.
-        if !package.isEmpty { refreshIcons(of: package, serial: serial, note: note) }
+        if !package.isEmpty { try refreshIcons(of: package, serial: serial, note: note) }
 
         let said = serial.exclusive { () -> String in
             let shell = GuestShell(serial: serial)
@@ -303,9 +306,9 @@ enum GuestPackages {
         // package owned.
         let apps = appPaths(of: package, serial: serial)
 
-        guard let code = runDetached("dpkg -r \(package) >> \(log) 2>&1", serial: serial, timeout: 1800)
+        guard let code = try runDetached("dpkg -r \(package) >> \(log) 2>&1", serial: serial, timeout: 1800)
         else { throw Failure.silent(L("Удаляю пакет")) }
-        for app in apps { runDetached("uicache -p \(app) >> \(log) 2>&1", serial: serial, timeout: 1800) }
+        for app in apps { try runDetached("uicache -p \(app) >> \(log) 2>&1", serial: serial, timeout: 1800) }
 
         let said = serial.exclusive {
             GuestShell(serial: serial).text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240",
@@ -362,8 +365,12 @@ enum GuestPackages {
     /// check every few seconds.
     @discardableResult
     private static func runDetached(_ command: String, serial: SerialConsole,
-                                    timeout: TimeInterval) -> Int64? {
+                                    timeout: TimeInterval) throws -> Int64? {
         let done = "/var/mobile/.inferno/step.rc"
+        // A guest that panics answers nothing ever again, and the wait below is
+        // half an hour long. The console says when that has happened, so the
+        // count is taken now and watched for the rest of the wait.
+        let alive = serial.guestDeaths
         let started = serial.exclusive { () -> Bool in
             let shell = GuestShell(serial: serial)
             shell.line("rm -f \(done)", timeout: 60)
@@ -375,6 +382,7 @@ enum GuestPackages {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             Thread.sleep(forTimeInterval: 3)
+            if serial.guestDeaths != alive { throw Failure.crashed(serial.guestDeathReason) }
             let code = serial.exclusive { () -> Int64? in
                 let shell = GuestShell(serial: serial)
                 guard shell.number("test -e \(done); echo $?", timeout: 60) == 0 else { return nil }
@@ -397,11 +405,11 @@ enum GuestPackages {
 
     /// Shows SpringBoard what a package brought, and nothing else.
     private static func refreshIcons(of package: String, serial: SerialConsole,
-                                     note: @escaping (String) -> Void) {
+                                     note: @escaping (String) -> Void) throws {
         let apps = appPaths(of: package, serial: serial)
         guard !apps.isEmpty else { return }
         note(L("Показываю приложение SpringBoard…"))
-        for app in apps { runDetached("uicache -p \(app) >> \(log) 2>&1", serial: serial, timeout: 1800) }
+        for app in apps { try runDetached("uicache -p \(app) >> \(log) 2>&1", serial: serial, timeout: 1800) }
     }
 
     /// Restarts SpringBoard.
@@ -492,7 +500,7 @@ enum GuestPackages {
         // the shell pane look broken while a repair was running.
         for step in steps {
             note(step.title + "…")
-            guard let code = runDetached(step.command, serial: serial, timeout: step.timeout) else {
+            guard let code = try runDetached(step.command, serial: serial, timeout: step.timeout) else {
                 if step.fatal { throw Failure.silent(step.title) }
                 complaints.append(L("«%@» не ответил вовремя.", step.title))
                 continue

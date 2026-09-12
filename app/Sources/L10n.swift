@@ -378,6 +378,15 @@ enum L10n {
         "Готово": "Done",
         "Переношу пакет в гостя…": "Carrying the package into the guest…",
         "Ставлю пакет…": "Installing the package…",
+        "Внедряется в launchd, а гость этого не умеет: launchd падает, ядро уходит в панику.":
+            "It injects itself into launchd, which this guest cannot do: launchd dies and the kernel panics.",
+        "Гость упал и перезагружается, команда не доведена до конца: %@":
+            "The guest fell over and is rebooting; the command did not finish: %@",
+        "Гостю нельзя: %@": "The guest cannot take it: %@",
+        "Гость упал: %@": "The guest fell over: %@",
+        "Всё равно установить": "Install it anyway",
+        "Гость упал в панику — поднимаю менеджер пакетов заново, когда вернётся.":
+            "The guest panicked; the package manager will be set up again once it is back.",
         "Ставлю пакет": "Installing the package",
         "Настраиваю пакеты…": "Configuring the packages…",
         "→ пакет %@": "→ package %@",

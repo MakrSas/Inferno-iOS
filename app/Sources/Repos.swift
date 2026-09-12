@@ -23,6 +23,39 @@ struct RepoPackage: Identifiable, Hashable {
     var url: URL? { URL(string: path, relativeTo: repo)?.absoluteURL }
 }
 
+/// Packages that take the guest down with them, and why.
+///
+/// Every hooking runtime works the same way: its library has to be loaded into
+/// processes that did not ask for it, launchd first of all. This guest cannot
+/// grant that. AMFI is enforcing, nothing patches amfid, and the page carrying
+/// the injected code fails validation the moment it is touched — launchd takes
+/// a SIGBUS, and a launchd that exits is not an error but a kernel panic:
+/// `initproc exited -- exit reason namespace 2 subcode 0xa`, then the watchdog
+/// reboots the machine. Measured on 12 September 2026 with mobilesubstrate
+/// 0.9.7113: the guest panicked in the middle of the install.
+///
+/// So these are refused rather than warned about. The tweaks that depend on
+/// them are not: without a runtime they are inert files, which is dull but
+/// harmless.
+extension RepoPackage {
+    var refusal: String? { RepoPackage.refusals[id] }
+
+    private static var hookingRuntime: String {
+        L("Внедряется в launchd, а гость этого не умеет: launchd падает, ядро уходит в панику.")
+    }
+
+    private static let refusals: [String: String] = [
+        "mobilesubstrate": hookingRuntime,
+        "com.saurik.substrate.safemode": hookingRuntime,
+        "com.ex.substitute": hookingRuntime,
+        "com.ex.libsubstitute": hookingRuntime,
+        "org.coolstar.libhooker": hookingRuntime,
+        "org.coolstar.libhooker-utils": hookingRuntime,
+        "ellekit": hookingRuntime,
+        "com.ex.substitute-safemode": hookingRuntime,
+    ]
+}
+
 /// One repository and what the last fetch had to say about it.
 struct Repo: Identifiable, Hashable, Codable {
     var url: String

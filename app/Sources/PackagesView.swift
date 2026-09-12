@@ -91,7 +91,15 @@ struct PackagesView: View {
             {
                 if let package = chosen {
                     let have = installed[package.id]
-                    Button(have == nil ? L("Установить") : L("Переустановить")) { install(package) }
+                    // A package that panics the guest still gets a button, at
+                    // the far end of a warning: this is somebody's own machine,
+                    // and the answer to «I know, do it» is not a grey button.
+                    if package.refusal != nil {
+                        Button(L("Всё равно установить"), role: .destructive) { install(package) }
+                    }
+                    else {
+                        Button(have == nil ? L("Установить") : L("Переустановить")) { install(package) }
+                    }
                     if have != nil {
                         Button(L("Удалить"), role: .destructive) {
                             dismiss()
@@ -101,8 +109,9 @@ struct PackagesView: View {
                 }
             } message: {
                 if let package = chosen {
-                    Text(installed[package.id].map { L("Установлен %@, в источнике %@", $0, package.version) }
-                        ?? L("Версия %@", package.version))
+                    let version = installed[package.id].map { L("Установлен %@, в источнике %@", $0, package.version) }
+                        ?? L("Версия %@", package.version)
+                    Text(package.refusal.map { version + "\n\n" + L("Гостю нельзя: %@", $0) } ?? version)
                 }
             }
             .task {
@@ -115,6 +124,11 @@ struct PackagesView: View {
     private func row(_ package: RepoPackage) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
+                if package.refusal != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 if installed[package.id] != nil {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption)

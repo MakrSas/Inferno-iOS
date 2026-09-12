@@ -179,6 +179,7 @@ final class VMModel: ObservableObject {
                 }
                 if self.config.network { self.watchNetwork() }
                 if Settings.shared.autoRepairPackages { self.preparePackages() }
+                self.serial.onGuestDeath = { [weak self] in self?.guestDied() }
                 // Report what the machine is doing once it has had time to boot.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     self.inspectMachine()
@@ -376,7 +377,7 @@ final class VMModel: ObservableObject {
     /// them Cydia fails with `cydo returned an error code (2)` — an error that
     /// says nothing about why. Only the quick half runs here; the slow half is
     /// needed once per image and stays on the button.
-    private func preparePackages() {
+    private func preparePackages(delay: TimeInterval = 45) {
         let serial = self.serial
         var attempts = 0
 
@@ -403,7 +404,21 @@ final class VMModel: ObservableObject {
         // Not ten seconds in: the guest is still booting then, and it puts the
         // root back read-only on its way up — the remount answered 0 and meant
         // nothing.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { attempt() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { attempt() }
+    }
+
+    /// The guest panicked and the watchdog is restarting it.
+    ///
+    /// Everything the package manager needs — the writable root, the folders,
+    /// the root helper — is undone by that, and the guest gives no other sign:
+    /// the app goes on running, the console goes on printing, and Cydia is
+    /// quietly broken again. So the same preparation that runs at startup runs
+    /// again, once the machine has had time to come back up.
+    private func guestDied() {
+        LogCapture.shared.note(L("Гость упал: %@", serial.guestDeathReason))
+        guard Settings.shared.autoRepairPackages, isRunning else { return }
+        LogCapture.shared.note(L("Гость упал в панику — поднимаю менеджер пакетов заново, когда вернётся."))
+        preparePackages(delay: 150)
     }
 
     /// Puts the guest's package manager back together — the fix for Cydia's
