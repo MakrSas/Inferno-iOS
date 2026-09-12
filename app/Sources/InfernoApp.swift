@@ -237,6 +237,38 @@ final class VMModel: ObservableObject {
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
     }
 
+    /// What the guest has installed, for the package manager to mark.
+    func installedPackages() async -> [String: String] {
+        let serial = self.serial
+        let files = self.files
+        return await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .userInitiated).async {
+                done.resume(returning: (try? GuestPackages.installed(serial: serial, files: files)) ?? [:])
+            }
+        }
+    }
+
+    /// Removes a package the guest has.
+    func removePackage(_ package: String) {
+        guard isRunning, transfer?.isRunning != true else { return }
+        transfer = .running(title: L("Удаляю %@…", package), done: 0, total: 0)
+        let serial = self.serial
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let said = try GuestPackages.remove(package, serial: serial)
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Пакет удалён.") + (said.isEmpty ? "" : "\n" + said))
+                    LogCapture.shared.note(L("Пакеты: %@ удалён.", package))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note(L("Пакеты: %@ — %@", package, error.localizedDescription))
+                }
+            }
+        }
+    }
+
     /// Restarts the guest's SpringBoard, which is how a freshly installed tweak
     /// gets loaded.
     func respring() {

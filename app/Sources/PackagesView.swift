@@ -16,12 +16,19 @@ struct PackagesView: View {
     @State private var sources = false
     @State private var downloading: String?
     @State private var complaint: String?
+    /// What the guest already has, by package name. Read once when the screen
+    /// opens: the answer costs a file transfer, and it does not change behind
+    /// our back while the list is being read.
+    @State private var installed: [String: String] = [:]
+    @State private var onlyInstalled = false
+    @State private var chosen: RepoPackage?
 
     /// Repositories hold tens of thousands of packages and a list that long is
     /// slower to draw than it is to scroll. Until something is typed, this is a
     /// window onto the index, not the whole of it.
     private var shown: [RepoPackage] {
-        let all = store.packages
+        var all = store.packages
+        if onlyInstalled { all = all.filter { installed[$0.id] != nil } }
         guard !query.isEmpty else { return Array(all.prefix(200)) }
         let needle = query.lowercased()
         return all.filter {
@@ -54,7 +61,7 @@ struct PackagesView: View {
                 }
 
                 ForEach(shown) { package in
-                    Button { install(package) } label: { row(package) }
+                    Button { chosen = package } label: { row(package) }
                         .buttonStyle(.plain)
                         .disabled(downloading != nil || model.transfer?.isRunning == true)
                 }
@@ -74,20 +81,57 @@ struct PackagesView: View {
                     Button(L("Закрыть")) { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button { sources = true } label: { Image(systemName: "list.bullet") }
+                    Menu {
+                        Toggle(L("Только установленные"), isOn: $onlyInstalled)
+                        Button(L("Источники…"), systemImage: "list.bullet") { sources = true }
+                        Button(L("Перечитать установленное"), systemImage: "arrow.clockwise") {
+                            Task { installed = await model.installedPackages() }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
             }
             .sheet(isPresented: $sources) { SourcesView(store: store) }
-            .task { if store.packages.isEmpty { await store.refresh() } }
+            .confirmationDialog(chosen?.name ?? "", isPresented: Binding(
+                get: { chosen != nil }, set: { if !$0 { chosen = nil } }), titleVisibility: .visible)
+            {
+                if let package = chosen {
+                    let have = installed[package.id]
+                    Button(have == nil ? L("Установить") : L("Переустановить")) { install(package) }
+                    if have != nil {
+                        Button(L("Удалить"), role: .destructive) {
+                            dismiss()
+                            model.removePackage(package.id)
+                        }
+                    }
+                }
+            } message: {
+                if let package = chosen {
+                    Text(installed[package.id].map { L("Установлен %@, в источнике %@", $0, package.version) }
+                        ?? L("Версия %@", package.version))
+                }
+            }
+            .task {
+                if store.packages.isEmpty { await store.refresh() }
+                if installed.isEmpty { installed = await model.installedPackages() }
+            }
         }
     }
 
     private func row(_ package: RepoPackage) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
+                if installed[package.id] != nil {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
                 Text(package.name).font(.body)
                 Spacer()
-                Text(package.version).font(.caption).foregroundStyle(.secondary)
+                Text(installed[package.id] ?? package.version)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if !package.summary.isEmpty {
                 Text(package.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)

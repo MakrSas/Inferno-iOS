@@ -216,6 +216,50 @@ enum GuestPackages {
         }
     }
 
+    /// What the guest has installed, as package name to version.
+    ///
+    /// Read through a file rather than off the console: the answer is three
+    /// hundred lines long, and the console loses bytes inside long ones.
+    static func installed(serial: SerialConsole, files: GuestFiles) throws -> [String: String] {
+        let listing = "/var/mobile/.inferno/installed.txt"
+
+        try serial.exclusive {
+            let shell = GuestShell(serial: serial)
+            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
+            guard shell.line("dpkg-query -W -f='${Package}\t${Version}\n' > \(listing) 2>/dev/null",
+                             timeout: 600) != nil
+            else { throw Failure.silent(L("Читаю установленное")) }
+        }
+
+        let file = try files.receive(listing, progress: { _, _ in })
+        let text = String(decoding: (try? Data(contentsOf: file)) ?? Data(), as: UTF8.self)
+        var out: [String: String] = [:]
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            out[String(parts[0])] = String(parts[1])
+        }
+        return out
+    }
+
+    /// Removes a package, with its configuration files left where they are —
+    /// the same thing Cydia's own remove does.
+    static func remove(_ package: String, serial: SerialConsole) throws -> String {
+        try serial.exclusive {
+            let shell = GuestShell(serial: serial)
+            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            shell.line(": > \(log)", timeout: 60)
+            guard let code = shell.line("dpkg -r \(package) >> \(log) 2>&1", timeout: 1800) else {
+                throw Failure.silent(L("Удаляю пакет"))
+            }
+            shell.line("uicache --all >> \(log) 2>&1", timeout: 1800)
+            let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
+            if code != 0 { throw Failure.step(L("Удаляю пакет") + (said.map { ": " + $0 } ?? ""), code) }
+            return said ?? ""
+        }
+    }
+
     /// Restarts SpringBoard.
     ///
     /// Tweaks are loaded into it when it starts, so one that was just installed

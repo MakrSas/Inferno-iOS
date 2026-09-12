@@ -57,6 +57,8 @@ final class RepoStore: ObservableObject {
         "http://apt.thebigboss.org/repofiles/cydia/",
         "https://repo.chariz.com/",
         "https://havoc.app/",
+        // Filza lives nowhere else.
+        "https://tigisoftware.com/cydia/",
     ]
 
     private static let key = "repositories"
