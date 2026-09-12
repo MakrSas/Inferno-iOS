@@ -255,17 +255,18 @@ final class ShellChannel: ObservableObject {
                 self.serial.send("m=\(mark);s=S$m;e=E$m\n")
                 self.serial.send("echo \"$s\";echo ok;echo \"$e\"\n")
             }
+            // The clock starts when the probe is actually sent, not when it is
+            // queued. Somebody else can hold the console for a minute — the
+            // repair at startup does — and a timeout measured from here used to
+            // expire before this shell had said a word.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+                guard let self, self.generation == mine, self.state == .connecting else { return }
+                self.release()
+                self.state = .failed(L("Шелл не отозвался на проверку. Похоже, на консоли не bash."))
+            }
         }
 
         if let note { LogCapture.shared.note("Шелл: " + note) }
-
-        // If the guest never answers the probe, the console is not carrying a
-        // shell that understands us.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
-            guard let self, self.generation == mine, self.state == .connecting else { return }
-            self.release()
-            self.state = .failed(L("Шелл не отозвался на проверку. Похоже, на консоли не bash."))
-        }
     }
 
     /// Shows what lies between the marks, and nothing else.

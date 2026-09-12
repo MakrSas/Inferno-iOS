@@ -419,14 +419,29 @@ enum GuestPackages {
             // cheap, and an image where Cydia was reinstalled has the original
             // back in place.
             note(L("Ставлю помощника для Cydia…"))
-            try write(rootScript, to: "/usr/libexec/cydia/cydo-root.sh", shell: shell)
-            try write(clientScript, to: "/tmp/cydo.new", shell: shell)
+            // Writing the two scripts costs a command per line, and the console
+            // is held for all of them — long enough at every start for the shell
+            // pane to give up waiting for its turn. So they are written only
+            // when they are not already there in this exact shape.
+            var stamp = PosixChecksum()
+            let text = (rootScript + clientScript).joined(separator: "\n")
+            text.utf8CString.withUnsafeBytes { stamp.update($0) }
+            let version = String(format: "%08x", stamp.value)
+            let marker = "/var/mobile/.inferno/cydo.version"
+            let same = shell.number("test -x /usr/libexec/cydia/cydo.real && "
+                                    + "grep -qs '^\(version)$' \(marker) && echo 1 || echo 0") == 1
+
+            if !same {
+                try write(rootScript, to: "/usr/libexec/cydia/cydo-root.sh", shell: shell)
+                try write(clientScript, to: "/tmp/cydo.new", shell: shell)
+            }
             let install = [
                 "chmod 755 /usr/libexec/cydia/cydo-root.sh",
                 "test -e /usr/libexec/cydia/cydo.real || mv /usr/libexec/cydia/cydo /usr/libexec/cydia/cydo.real",
-                "cp /tmp/cydo.new /usr/libexec/cydia/cydo",
+                same ? "true" : "cp /tmp/cydo.new /usr/libexec/cydia/cydo",
                 "chmod 755 /usr/libexec/cydia/cydo",
                 "rm -f /tmp/cydo.new",
+                "echo \(version) > \(marker)",
                 // An earlier version of this shipped a launchd job. It does not
                 // survive a reboot on this image, so it is taken back out.
                 "launchctl unload /Library/LaunchDaemons/com.inferno.cydo.plist >/dev/null 2>&1",
