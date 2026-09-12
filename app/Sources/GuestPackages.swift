@@ -202,11 +202,30 @@ enum GuestPackages {
 
             note(L("Настраиваю пакеты…"))
             shell.line("dpkg --configure -a >> \(log) 2>&1", timeout: 1800)
+
+            // A package that brings an app leaves it on disk and nothing else:
+            // SpringBoard learns about it from uicache, and without that the
+            // install looks like it did nothing at all.
+            note(L("Показываю приложения SpringBoard…"))
+            shell.line("uicache --all >> \(log) 2>&1", timeout: 1800)
             shell.line("rm -f \(remote)", timeout: 60)
 
             let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
             if code != 0 { throw Failure.step(L("Ставлю пакет") + (said.map { ": " + $0 } ?? ""), code) }
             return said ?? ""
+        }
+    }
+
+    /// Restarts SpringBoard.
+    ///
+    /// Tweaks are loaded into it when it starts, so one that was just installed
+    /// does nothing until this happens. Cydia calls it a respring and asks
+    /// first; here it is a menu entry for the same reason.
+    static func respring(serial: SerialConsole) throws {
+        try serial.exclusive {
+            let shell = GuestShell(serial: serial)
+            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            shell.line("killall -9 SpringBoard", timeout: 120)
         }
     }
 

@@ -237,6 +237,18 @@ final class VMModel: ObservableObject {
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
     }
 
+    /// Restarts the guest's SpringBoard, which is how a freshly installed tweak
+    /// gets loaded.
+    func respring() {
+        guard isRunning else { return }
+        let serial = self.serial
+        LogCapture.shared.note(L("Перезапускаю SpringBoard…"))
+        DispatchQueue.global(qos: .userInitiated).async {
+            do { try GuestPackages.respring(serial: serial) }
+            catch { LogCapture.shared.note(L("SpringBoard: %@", error.localizedDescription)) }
+        }
+    }
+
     /// Installs a `.deb` without Cydia: the guest is too slow for Cydia to
     /// survive its own packager, and this path has nothing watching a clock.
     func installDEB(_ url: URL) {
@@ -792,6 +804,9 @@ struct ControlMenu: View {
                 }
                 Button(L("Установить .deb в гостя…"), systemImage: "shippingbox.and.arrow.backward") {
                     pickDEB = true
+                }
+                Button(L("Перезапустить SpringBoard"), systemImage: "arrow.clockwise") {
+                    model.respring()
                 }
             }
             .disabled(!model.isRunning || model.transfer?.isRunning == true)
