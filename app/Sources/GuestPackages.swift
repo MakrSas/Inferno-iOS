@@ -225,12 +225,13 @@ enum GuestPackages {
                            note: @escaping (String) -> Void) throws -> String {
         let remote = "/var/mobile/.inferno/install.deb"
 
+        try awaitShell(serial)
+        try ensureWritable(serial)
+
         return try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
 
-            try ensureWritable(shell)
             note(L("Переношу пакет в гостя…"))
             try files.carry(local, to: remote, shell: shell, progress: progress, note: note)
 
@@ -265,9 +266,9 @@ enum GuestPackages {
     static func installed(serial: SerialConsole, files: GuestFiles) throws -> [String: String] {
         let listing = "/var/mobile/.inferno/installed.txt"
 
+        try awaitShell(serial)
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
             guard shell.line("dpkg-query -W -f='${Package}\t${Version}\n' > \(listing) 2>/dev/null",
                              timeout: 600) != nil
@@ -288,11 +289,11 @@ enum GuestPackages {
     /// Removes a package, with its configuration files left where they are —
     /// the same thing Cydia's own remove does.
     static func remove(_ package: String, serial: SerialConsole) throws -> String {
-        try serial.exclusive {
+        try ensureWritable(serial)
+        try awaitShell(serial)
+        return try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            try awaitShell(shell)
             shell.line(": > \(log)", timeout: 60)
-            try ensureWritable(shell)
             // Read before the removal: afterwards dpkg no longer knows what the
             // package owned.
             let apps = appPaths(of: package, shell: shell)
@@ -312,9 +313,13 @@ enum GuestPackages {
     /// when it is not, and it is never idle right after a boot or in the middle
     /// of a package. One look and a refusal cost a download that had already
     /// been carried in.
-    private static func awaitShell(_ shell: GuestShell) throws {
+    private static func awaitShell(_ serial: SerialConsole) throws {
         for attempt in 0..<10 {
-            if shell.number("echo 1", timeout: 30) == 1 { return }
+            // The console is taken for the asking, not for the waiting: holding
+            // it through the sleeps kept the shell pane from ever opening while
+            // this ran.
+            let answered = serial.exclusive { GuestShell(serial: serial).number("echo 1", timeout: 30) == 1 }
+            if answered { return }
             if attempt < 9 { Thread.sleep(forTimeInterval: 5) }
         }
         throw Failure.noShell
@@ -327,10 +332,14 @@ enum GuestPackages {
     /// is not to be trusted and the mount table is read instead. Asked again
     /// every ten seconds: whatever the guest is doing to it, it stops doing it
     /// within a minute.
-    private static func ensureWritable(_ shell: GuestShell) throws {
+    private static func ensureWritable(_ serial: SerialConsole) throws {
         for attempt in 0..<6 {
-            shell.line("mount -uw /", timeout: 120)
-            if shell.number("mount | grep -c ' on / .*read-only'") == 0 { return }
+            let writable = serial.exclusive { () -> Bool in
+                let shell = GuestShell(serial: serial)
+                shell.line("mount -uw /", timeout: 120)
+                return shell.number("mount | grep -c ' on / .*read-only'") == 0
+            }
+            if writable { return }
             if attempt < 5 { Thread.sleep(forTimeInterval: 10) }
         }
         throw Failure.stillReadOnly
@@ -358,9 +367,9 @@ enum GuestPackages {
     /// does nothing until this happens. Cydia calls it a respring and asks
     /// first; here it is a menu entry for the same reason.
     static func respring(serial: SerialConsole) throws {
+        try awaitShell(serial)
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            try awaitShell(shell)
             shell.line("killall -9 SpringBoard", timeout: 120)
         }
     }
@@ -409,29 +418,32 @@ enum GuestPackages {
     /// returns the lines worth showing when it is over.
     /// Everything, including the slow steps. This is the button.
     static func repair(serial: SerialConsole, note: @escaping (String) -> Void) throws -> [String] {
-        try run(serial: serial, steps: fastSteps + slowSteps, note: note)
+        note(L("Перемонтирую корень на запись…"))
+        try ensureWritable(serial)
+        return try run(serial: serial, steps: fastSteps + slowSteps, note: note)
     }
 
     /// Only what the reboot undid: the remount, the folders, the helper. Run at
     /// every start, quietly, because without it Cydia is broken again and the
     /// error it gives says nothing about why.
     static func prepare(serial: SerialConsole) throws -> [String] {
-        try run(serial: serial, steps: fastSteps, note: { _ in })
+        try ensureWritable(serial)
+        return try run(serial: serial, steps: fastSteps, note: { _ in })
     }
 
     private static func run(serial: SerialConsole, steps: [Step],
                             note: @escaping (String) -> Void) throws -> [String] {
         var complaints: [String] = []
 
+        // Nothing is typed into a console that has no shell on it yet: the
+        // commands would land in the boot log and look like they ran. Waited
+        // for outside the lock, so the shell pane can still open meanwhile.
+        try awaitShell(serial)
+
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            // Nothing is typed into a console that has no shell on it yet: the
-            // commands would land in the boot log and look like they ran.
-            try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno; : > \(log)", timeout: 60)
 
-            note(L("Перемонтирую корень на запись…"))
-            try ensureWritable(shell)
 
             for step in steps {
                 note(step.title + "…")
