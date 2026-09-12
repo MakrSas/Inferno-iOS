@@ -372,8 +372,8 @@ enum L10n {
         "Добавить": "Add",
         "Читаются указатели `Packages` и `Packages.gz`. Источники на `.bz2` или `.zst` не поддерживаются: распаковщиков для них в iOS нет.":
             "`Packages` and `Packages.gz` indexes are read. Sources that only publish `.bz2` or `.zst` are not supported: iOS has no decompressor for either.",
-        "нет читаемого указателя пакетов (нужен Packages или Packages.gz)":
-            "no readable package index (Packages or Packages.gz is needed)",
+        "нет читаемого указателя пакетов (Packages, Packages.gz, Packages.bz2)":
+            "no readable package index (Packages, Packages.gz, Packages.bz2)",
         "Закрыть": "Close",
         "Готово": "Done",
         "Переношу пакет в гостя…": "Carrying the package into the guest…",

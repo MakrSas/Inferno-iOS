@@ -30,9 +30,12 @@ struct Repo: Identifiable, Hashable, Codable {
 
     var address: URL? {
         // Repositories are named by a directory, and a missing slash turns the
-        // last component into a sibling — `apt.bingner.com/Packages` instead of
-        // `apt.bingner.com/Packages` under it.
-        URL(string: url.hasSuffix("/") ? url : url + "/")
+        // last component into a sibling. An address that already points inside
+        // a `dists` tree is cut back to the repository itself: that is what the
+        // packages' own paths are relative to.
+        var text = url
+        if let cut = text.range(of: "/dists/") { text = String(text[..<cut.lowerBound]) }
+        return URL(string: text.hasSuffix("/") ? text : text + "/")
     }
 }
 
@@ -101,14 +104,28 @@ final class RepoStore: ObservableObject {
         state = complaints.isEmpty ? .idle : .failed(complaints.joined(separator: "\n"))
     }
 
+    /// Where an index can be, relative to the repository's own address.
+    ///
+    /// Two layouts and three encodings. The flat one — an index in the root —
+    /// is what most tweak repositories use. The older ones are proper Debian
+    /// archives with a `dists` tree, and their `stable`/`ios` names have to be
+    /// guessed at, because nothing at the root says which they use. `.bz2`
+    /// comes first: BigBoss publishes nothing else. `.zst`, which a few of the
+    /// newest use, is left alone — iOS has no decompressor for it.
+    private static let indexPaths = [
+        "Packages.bz2", "Packages.gz", "Packages",
+        "dists/stable/main/binary-iphoneos-arm/Packages.bz2",
+        "dists/stable/main/binary-iphoneos-arm/Packages.gz",
+        "dists/ios/1443.00/main/binary-iphoneos-arm/Packages.bz2",
+        "dists/ios/1443.00/main/binary-iphoneos-arm/Packages.gz",
+    ]
+
     /// Reads one repository's index.
     ///
-    /// Three names are tried in turn: `.bz2` first, because the older
-    /// repositories publish only that, then `.gz`, then the plain file. `.zst`,
-    /// which a few of the newest use, is left alone — iOS has no decompressor
-    /// for it and carrying one would be a lot of code for a handful of sources.
+    /// The packages' own `Filename` is relative to the repository's address,
+    /// never to wherever the index turned out to live.
     private static func fetch(_ repo: URL) async throws -> [RepoPackage] {
-        for name in ["Packages.bz2", "Packages.gz", "Packages"] {
+        for name in indexPaths {
             guard let url = URL(string: name, relativeTo: repo) else { continue }
             var request = URLRequest(url: url)
             request.setValue("Telesphoreo APT-HTTP/1.0.592", forHTTPHeaderField: "User-Agent")
@@ -141,7 +158,7 @@ final class RepoStore: ObservableObject {
         case noIndex
 
         var errorDescription: String? {
-            L("нет читаемого указателя пакетов (нужен Packages или Packages.gz)")
+            L("нет читаемого указателя пакетов (Packages, Packages.gz, Packages.bz2)")
         }
     }
 
