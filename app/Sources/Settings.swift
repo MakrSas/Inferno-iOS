@@ -84,6 +84,10 @@ final class Settings: ObservableObject {
     var emulatorEnvironment: [String: String] {
         var env: [String: String] = [:]
         if vcpuPriority { env["INFERNO_VCPU_QOS"] = "interactive" }
+        // The audio hardware is described to the guest only when this is set: the drivers behind those
+        // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
+        // of them.
+        if guestAudio { env["INFERNO_AUDIO"] = "1" }
         return env
     }
 
@@ -376,7 +380,7 @@ private struct MachineSettings: View {
             } header: {
                 Text(L("Звук"))
             } footer: {
-                Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Услышать пока нечего: в эмулируемой машине не хватает звукового сопроцессора, через который iOS выводит на динамик, — поэтому гость в эту дорожку ничего не шлёт. Тумблер есть, чтобы проверять сторону телефона, пока делается сторона машины. Применяется при запуске машины."))
+                Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Тумблер описывает машине звуковое железо — динамик, шину I2S и сопроцессор, — а без него гостю о звуке не сообщается вовсе. Пока опыт: гость собирает звуковое устройство, но маршрут вывода у него ещё не встаёт, и машина от этих драйверов заметно тяжелеет. Применяется при запуске машины."))
             }
         }
         .navigationTitle(L("Машина"))

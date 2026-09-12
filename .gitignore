@@ -45,6 +45,11 @@ netlab/state-configured/
 # Записи прогонов — полезны, пока идёт работа, но это не исходники.
 netlab/*.log
 netlab/*.txt
+# Подписанные помощники для гостя: собираются из соседних .m/.c одной командой.
+netlab/nsio-ent
+netlab/beep
+netlab/rio
+netlab/sysnd
 run/
 logs/
 repro-logs/

@@ -171,7 +171,12 @@ struct VMConfig {
         if !audio {
             // Silence is asked for explicitly: with no audiodev named, the
             // machine's sound card takes the first output the build offers.
-            argv += ["-audiodev", "none,id=quiet"]
+            // The global is written in its long form on purpose — the short
+            // one splits the driver name at its first dot, and this driver is
+            // called `apple.mca`, so `-global apple.mca.audiodev=quiet` looks
+            // for a device called `apple` and is quietly dropped.
+            argv += ["-audiodev", "none,id=quiet",
+                     "-global", "driver=apple.mca,property=audiodev,value=quiet"]
         }
 
         if headless || builtInDisplay {
