@@ -114,7 +114,23 @@ enum GuestPackages {
         "            esac",
         "            keep+=(\"$a\")",
         "        done",
-        "        /usr/bin/dpkg \"${keep[@]}\" > \"$id.out\" 2>&1",
+        // cydo is not only dpkg. Cydia hands it a program to run as root —
+        // /bin/rm, /bin/ln, /bin/cp, setnsfpn, firmware.sh — and passes bare
+        // options only when it means dpkg itself. Running dpkg either way is
+        // how `/bin/rm -f …` turned into `dpkg -f …` and answered `need an
+        // action option`.
+        "        case \"${keep[0]-}\" in",
+        // firmware.sh takes tens of seconds here and Cydia blocks its main
+        // thread on this call, which on a guest this slow is long enough for
+        // iOS to kill Cydia as unresponsive. The repair button runs it for
+        // real; from here it is let go of and answered at once.
+        "            */firmware.sh)",
+        "                (nohup \"${keep[@]}\" >/dev/null 2>&1 &)",
+        "                : > \"$id.out\"",
+        "                ;;",
+        "            /*) \"${keep[@]}\" > \"$id.out\" 2>&1;;",
+        "            *)  /usr/bin/dpkg \"${keep[@]}\" > \"$id.out\" 2>&1;;",
+        "        esac",
         "        echo $? > \"$id.rc\"",
         "    done",
         "    sleep 0.3",

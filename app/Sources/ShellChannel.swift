@@ -279,7 +279,14 @@ final class ShellChannel: ObservableObject {
 
             let text = String(decoding: line, as: UTF8.self)
             if text.contains("S" + marker) { inside = true; continue }
-            if text.contains("E" + marker) { inside = false; finished(); continue }
+            if let mark = text.range(of: "E" + marker) {
+                // The status rides on the end marker's own line, which is the
+                // only place it can be read without a prompt to look at.
+                let tail = text[mark.upperBound...].trimmingCharacters(in: .whitespaces)
+                inside = false
+                finished(code: Int(tail))
+                continue
+            }
             guard inside else { continue }
             // The kernel can still write into the window; that much is filtered
             // the old way, by the shape of what it writes.
@@ -287,12 +294,18 @@ final class ShellChannel: ObservableObject {
         }
     }
 
-    private func finished() {
+    private func finished(code: Int?) {
         if state == .connecting {
             state = .up(.console)
             screen.append("\u{1B}[32m" + L("Канал по консоли открыт: показывается только вывод команд.")
                           + "\u{1B}[0m\r\n")
+            return
         }
+        // Without a prompt of its own, the pane gave no sign that a command had
+        // ended — and on a guest this slow, "still running" and "finished with
+        // nothing to say" look exactly alike.
+        guard let code else { return }
+        screen.append("\u{1B}[\(code == 0 ? "90" : "31")m" + L("— готово, код %d", code) + "\u{1B}[0m\r\n")
     }
 
     // MARK: - Talking
@@ -313,7 +326,7 @@ final class ShellChannel: ObservableObject {
             }
         case .console:
             screen.append("\u{1B}[36m# \u{1B}[0m" + command + "\r\n")
-            serial.send("echo \"$s\";{ \(command) ;} 2>&1;echo \"$e\"\n")
+            serial.send("echo \"$s\";{ \(command) ;} 2>&1;r=$?;echo \"$e $r\"\n")
         case nil:
             break
         }

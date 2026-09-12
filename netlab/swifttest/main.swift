@@ -32,6 +32,18 @@ do {
         let target = try GuestInstaller(serial: serial, files: files)
             .install(ipa: ipa, progress: { _, _ in }, note: { print("   \($0)") })
         print(String(format: "УСТАНОВЛЕНО: %@ за %.1f с", target, Date().timeIntervalSince(t0)))
+    } else if mode == "pull" {
+        let remote = CommandLine.arguments[2]
+        let local = URL(fileURLWithPath: CommandLine.arguments[3])
+        print("== забираю \(remote)")
+        let started = Date()
+        let got = try files.receive(remote, progress: { done, total in
+            if total > 0 { print("   \(done * 100 / total)%") }
+        })
+        try? FileManager.default.removeItem(at: local)
+        try FileManager.default.moveItem(at: got, to: local)
+        let size = (try? FileManager.default.attributesOfItem(atPath: local.path)[.size] as? Int) ?? 0
+        print("== \(size ?? 0) Б за \(String(format: "%.1f", Date().timeIntervalSince(started))) с")
     } else if mode == "packages" {
         print("== чиню менеджер пакетов")
         let complaints = try GuestPackages.repair(serial: serial, note: { print("   \($0)") })

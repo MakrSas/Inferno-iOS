@@ -163,6 +163,7 @@ enum L10n {
         "Гость закрыл канал.": "The guest closed the channel.",
         "Через консоль": "Over the console",
         "Через сеть": "Over the network",
+        "— готово, код %d": "— done, status %d",
         "Гость не позвонил обратно.": "The guest never called back.",
         "Перехожу на консоль.": "Falling back to the console.",
         "Сети у гостя нет — шелл идёт по консоли.":
