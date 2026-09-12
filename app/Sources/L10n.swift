@@ -375,9 +375,51 @@ enum L10n {
         "нет читаемого указателя пакетов (Packages, Packages.gz, Packages.bz2)":
             "no readable package index (Packages, Packages.gz, Packages.bz2)",
         "Закрыть": "Close",
-        "Готово": "Done",
         "Переношу пакет в гостя…": "Carrying the package into the guest…",
         "Ставлю пакет…": "Installing the package…",
+        // The log lines: they carry substitutions, so they used to slip past
+        // the table entirely and reach an English reader in Russian — which is
+        // what the emulator log attached to a bug report is full of.
+        "Сборка приложения: %@": "App build: %@",
+        "Экран: %@. Переключитесь на VNC в параметрах.":
+            "Display: %@. Switch to VNC in the settings.",
+        "Сеть: адреса всё ещё нет, попытка %d из %d.":
+            "Network: still no address, attempt %d of %d.",
+        "Файлы: отправляю %@ в гостя": "Files: sending %@ to the guest",
+        "Файлы: %@ → %@, %@": "Files: %@ → %@, %@",
+        "Файлы: %@ не отправлен — %@": "Files: %@ was not sent — %@",
+        "Файлы: забираю %@ из гостя": "Files: fetching %@ from the guest",
+        "Файлы: %@ не получен — %@": "Files: %@ was not fetched — %@",
+        "Установка: %@": "Install: %@",
+        "Установка: %@ → %@, %@": "Install: %@ → %@, %@",
+        "Установка: %@ — %@": "Install: %@ — %@",
+        "Экран: встроенный вывод, %d×%d": "Display: built-in output, %d×%d",
+        "Кадры: гость показал %.0f/с, дошло %.0f/с, вхолостую %.0f/с; главный цикл %.0f/с; чтение %.0f мс/с, выдача %.0f мс/с":
+            "Frames: the guest drew %.0f/s, %.0f/s arrived, %.0f/s idle; main loop %.0f/s; reading %.0f ms/s, handing over %.0f ms/s",
+        "%@: mmap отказал (%@)": "%@: mmap refused (%@)",
+        "%@: mprotect отказал (%@)": "%@: mprotect refused (%@)",
+        "%@: ВЫПОЛНЯЕТСЯ": "%@: RUNS",
+        "%@: вернул %d, ожидалось 42": "%@: returned %d, expected 42",
+        "отлаживается: %@": "being debugged: %@",
+        "%@: нет (%@)": "%@: no (%@)",
+        "нет (mprotect: %@)": "no (mprotect: %@)",
+        "%@: да": "%@: yes",
+        "JIT: доступен (%@)": "JIT: available (%@)",
+        "JIT: НЕДОСТУПЕН — %@": "JIT: NOT AVAILABLE — %@",
+        "%@ → не удалось отправить": "%@ → could not be sent",
+        "%@ → нет ответа": "%@ → no answer",
+        "Выключение: %@": "Shutdown: %@",
+        "Библиотека загружена: %@": "Library loaded: %@",
+        "Не удалось перейти в %@ — USB-сокет может не подняться":
+            "Could not change into %@ — the USB socket may fail to come up",
+        "Где крутится поток (%d замеров):": "Where the thread is spinning (%d samples):",
+        "Шелл: %@": "Shell: %@",
+        "%d байт": "%d bytes",
+        "VNC: подключено, экран %d×%d": "VNC: connected, screen %d×%d",
+        "VNC: %@ — попытка %d": "VNC: %@ — attempt %d",
+        "неподдерживаемая кодировка %d": "unsupported encoding %d",
+        "да": "yes",
+        "нет": "no",
         "Внедряется в launchd, а гость этого не умеет: launchd падает, ядро уходит в панику.":
             "It injects itself into launchd, which this guest cannot do: launchd dies and the kernel panics.",
         "Гость упал и перезагружается, команда не доведена до конца: %@":

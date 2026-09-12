@@ -33,11 +33,11 @@ final class QMPClient {
 
             for command in ["qmp_capabilities", "query-status", "query-cpus-fast", "query-vnc"] {
                 guard sock.write(Array("{\"execute\":\"\(command)\"}\n".utf8)) else {
-                    lines.append("\(command) → не удалось отправить")
+                    lines.append(L("%@ → не удалось отправить", command))
                     break
                 }
                 guard let reply = sock.readSome(max: 64 * 1024) else {
-                    lines.append("\(command) → нет ответа")
+                    lines.append(L("%@ → нет ответа", command))
                     break
                 }
                 if command != "qmp_capabilities" {
@@ -63,7 +63,7 @@ final class QMPClient {
             defer { sock.close() }
 
             if let problem = sock.connect(port: port) {
-                return completion("Выключение: \(problem)")
+                return completion(L("Выключение: %@", problem))
             }
             guard sock.readSome() != nil else {
                 return completion(L("Выключение: приветствия от QMP нет"))

@@ -129,7 +129,7 @@ final class EmbeddedDisplay: GuestDisplay {
 
     private func report(_ new: GuestDisplayStatus) {
         if case .connected(let w, let h) = new {
-            LogCapture.shared.note("Экран: встроенный вывод, \(w)×\(h)")
+            LogCapture.shared.note(L("Экран: встроенный вывод, %d×%d", w, h))
         }
         DispatchQueue.main.async {
             self.status = new
@@ -209,8 +209,8 @@ final class EmbeddedDisplay: GuestDisplay {
         guard counters[0] > 0 || tally.delivered > 0 else { return }
         let milliseconds = { (nanos: UInt64) in Double(nanos) / 1_000_000 / elapsed }
 
-        LogCapture.shared.note(String(
-            format: "Кадры: гость показал %.0f/с, дошло %.0f/с, вхолостую %.0f/с; главный цикл %.0f/с; чтение %.0f мс/с, выдача %.0f мс/с",
+        LogCapture.shared.note(L(
+            "Кадры: гость показал %.0f/с, дошло %.0f/с, вхолостую %.0f/с; главный цикл %.0f/с; чтение %.0f мс/с, выдача %.0f мс/с",
             Double(counters[0]) / elapsed, Double(tally.delivered) / elapsed, Double(tally.idle) / elapsed,
             Double(counters[1]) / elapsed, milliseconds(tally.readNanos), milliseconds(tally.handNanos)))
     }

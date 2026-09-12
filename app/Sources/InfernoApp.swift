@@ -8,7 +8,7 @@ struct InfernoApp: App {
         Bootstrap.prepareDocuments()
         // Start capturing before anything can fail, so the reason is on screen.
         LogCapture.shared.start()
-        LogCapture.shared.note("Сборка приложения: \(BuildInfo.stamp)")
+        LogCapture.shared.note(L("Сборка приложения: %@", BuildInfo.stamp))
         // Must happen before the emulator asks for its translation buffer.
         JIT.prepare()
     }
@@ -176,7 +176,7 @@ final class VMModel: ObservableObject {
                         }
                         else {
                             let why = L("в этой сборке библиотеки нет встроенного вывода")
-                            LogCapture.shared.note("Экран: \(why). Переключитесь на VNC в параметрах.")
+                            LogCapture.shared.note(L("Экран: %@. Переключитесь на VNC в параметрах.", why))
                             self.displayStatus = .failed(why)
                         }
                     }
@@ -489,7 +489,7 @@ final class VMModel: ObservableObject {
             }
             if Settings.shared.netAutoFix, attempts < tries {
                 attempts += 1
-                LogCapture.shared.note("Сеть: адреса всё ещё нет, попытка \(attempts) из \(tries).")
+                LogCapture.shared.note(L("Сеть: адреса всё ещё нет, попытка %d из %d.", attempts, tries))
                 fixNetwork()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: check)
                 return
@@ -522,7 +522,7 @@ final class VMModel: ObservableObject {
         if let why = transferBlocker() { transfer = .failed(why); return }
         let name = url.lastPathComponent
         transfer = .running(title: "→ \(name)", done: 0, total: 0)
-        LogCapture.shared.note("Файлы: отправляю \(name) в гостя")
+        LogCapture.shared.note(L("Файлы: отправляю %@ в гостя", name))
         let files = self.files
         DispatchQueue.global(qos: .userInitiated).async {
             // Files picked from the Files app are lent, not given.
@@ -540,12 +540,12 @@ final class VMModel: ObservableObject {
                 let summary = TransferState.summary(url: url, seconds: Date().timeIntervalSince(started))
                 DispatchQueue.main.async {
                     self.transfer = .finished("\(name) → \(remote)\n\(summary)")
-                    LogCapture.shared.note("Файлы: \(name) → \(remote), \(summary)")
+                    LogCapture.shared.note(L("Файлы: %@ → %@, %@", name, remote, summary))
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.transfer = .failed(error.localizedDescription)
-                    LogCapture.shared.note("Файлы: \(name) не отправлен — \(error.localizedDescription)")
+                    LogCapture.shared.note(L("Файлы: %@ не отправлен — %@", name, error.localizedDescription))
                 }
             }
         }
@@ -562,7 +562,7 @@ final class VMModel: ObservableObject {
         }
         let name = url.lastPathComponent
         transfer = .running(title: L("→ установка %@", name), done: 0, total: 0)
-        LogCapture.shared.note("Установка: \(name)")
+        LogCapture.shared.note(L("Установка: %@", name))
         let installer = GuestInstaller(serial: serial, files: files)
         DispatchQueue.global(qos: .userInitiated).async {
             // Files picked from the Files app are lent, not given.
@@ -593,12 +593,12 @@ final class VMModel: ObservableObject {
                 let caveat = installer.warning.map { "\n" + $0 } ?? ""
                 DispatchQueue.main.async {
                     self.transfer = .finished(L("Установлено: %@", target) + "\n" + summary + caveat)
-                    LogCapture.shared.note("Установка: \(name) → \(target), \(summary)\(caveat)")
+                    LogCapture.shared.note(L("Установка: %@ → %@, %@", name, target, summary) + caveat)
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.transfer = .failed(error.localizedDescription)
-                    LogCapture.shared.note("Установка: \(name) — \(error.localizedDescription)")
+                    LogCapture.shared.note(L("Установка: %@ — %@", name, error.localizedDescription))
                 }
             }
         }
@@ -610,7 +610,7 @@ final class VMModel: ObservableObject {
         if let why = transferBlocker() { transfer = .failed(why); return }
         let name = (remote as NSString).lastPathComponent
         transfer = .running(title: "← \(name)", done: 0, total: 0)
-        LogCapture.shared.note("Файлы: забираю \(remote) из гостя")
+        LogCapture.shared.note(L("Файлы: забираю %@ из гостя", remote))
         let files = self.files
         DispatchQueue.global(qos: .userInitiated).async {
             let started = Date()
@@ -624,12 +624,12 @@ final class VMModel: ObservableObject {
                 let summary = TransferState.summary(url: saved, seconds: Date().timeIntervalSince(started))
                 DispatchQueue.main.async {
                     self.transfer = .finished("\(remote) → Guest/\(saved.lastPathComponent)\n\(summary)")
-                    LogCapture.shared.note("Файлы: \(remote) → \(saved.path), \(summary)")
+                    LogCapture.shared.note(L("Файлы: %@ → %@, %@", remote, saved.path, summary))
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.transfer = .failed(error.localizedDescription)
-                    LogCapture.shared.note("Файлы: \(remote) не получен — \(error.localizedDescription)")
+                    LogCapture.shared.note(L("Файлы: %@ не получен — %@", remote, error.localizedDescription))
                 }
             }
         }

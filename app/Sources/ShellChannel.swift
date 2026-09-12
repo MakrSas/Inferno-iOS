@@ -270,7 +270,7 @@ final class ShellChannel: ObservableObject {
             }
         }
 
-        if let note { LogCapture.shared.note("Шелл: " + note) }
+        if let note { LogCapture.shared.note(L("Шелл: %@", note)) }
     }
 
     /// Shows what lies between the marks, and nothing else.

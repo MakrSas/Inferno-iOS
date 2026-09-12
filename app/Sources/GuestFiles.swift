@@ -339,7 +339,7 @@ final class GuestFiles {
         let size = shell.number("wc -c < \(path)", timeout: slack)
         let crc = shell.number("cksum < \(path) | cut -d' ' -f1", timeout: slack)
         guard size == sum.length, crc == Int64(sum.value) else {
-            throw Failure.mismatch("в госте \(size.map(String.init) ?? "?") Б, у нас \(sum.length) Б")
+            throw Failure.mismatch(L("в госте %@ Б, у нас %d Б", size.map(String.init) ?? "?", sum.length))
         }
     }
 

@@ -59,7 +59,7 @@ enum Sampler {
                 return completion(L("Пробник: не удалось определить занятый поток"))
             }
 
-            var lines = ["Где крутится поток (\(busiest.samples) замеров):"]
+            var lines = [L("Где крутится поток (%d замеров):", busiest.samples)]
             var seen = Set<UInt64>()
             for pc in busiest.pcs {
                 seen.insert(pc)
