@@ -237,6 +237,56 @@ final class VMModel: ObservableObject {
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
     }
 
+    /// Downloads a package and installs it, showing both in the same banner as
+    /// every other transfer — so the manager can be closed the moment it starts
+    /// and the guest's screen watched instead.
+    func installFromRepo(name: String, id: String, version: String, url: URL, size: Int64) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        transfer = .running(title: L("↓ %@", name), done: 0, total: size)
+        LogCapture.shared.note(L("Пакеты: качаю %@", name))
+
+        Task {
+            do {
+                var request = URLRequest(url: url)
+                request.setValue("Telesphoreo APT-HTTP/1.0.592", forHTTPHeaderField: "User-Agent")
+                request.setValue("iPhone12,1", forHTTPHeaderField: "X-Machine")
+                request.setValue("14.0", forHTTPHeaderField: "X-Firmware")
+                request.timeoutInterval = 60
+
+                let (stream, response) = try await URLSession.shared.bytes(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw GuestFiles.Failure.io(L("репозиторий ответил %d",
+                                                  (response as? HTTPURLResponse)?.statusCode ?? 0))
+                }
+
+                let total = max(response.expectedContentLength, size)
+                var body = Data()
+                body.reserveCapacity(Int(max(total, 0)))
+                var shown = Date.distantPast
+                for try await byte in stream {
+                    body.append(byte)
+                    if Date().timeIntervalSince(shown) > 0.1 {
+                        shown = Date()
+                        self.transfer = .running(title: L("↓ %@", name), done: Int64(body.count), total: total)
+                    }
+                }
+
+                let file = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("\(id)_\(version).deb")
+                try? FileManager.default.removeItem(at: file)
+                try body.write(to: file)
+
+                self.transfer = nil
+                self.installDEB(file)
+            }
+            catch {
+                self.transfer = .failed(error.localizedDescription)
+                LogCapture.shared.note(L("Пакеты: %@ — %@", name, error.localizedDescription))
+            }
+        }
+    }
+
     /// What the guest has installed, for the package manager to mark.
     func installedPackages() async -> [String: String] {
         let serial = self.serial

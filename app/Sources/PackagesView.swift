@@ -14,7 +14,6 @@ struct PackagesView: View {
 
     @State private var query = ""
     @State private var sources = false
-    @State private var downloading: String?
     @State private var complaint: String?
     /// What the guest already has, by package name. Read once when the screen
     /// opens: the answer costs a file transfer, and it does not change behind
@@ -50,12 +49,6 @@ struct PackagesView: View {
                 if case .failed(let why) = store.state {
                     Text(why).font(.footnote).foregroundStyle(.orange)
                 }
-                if let downloading {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text(L("Качаю %@…", downloading)).foregroundStyle(.secondary)
-                    }
-                }
                 if let complaint {
                     Text(complaint).font(.footnote).foregroundStyle(.red)
                 }
@@ -63,7 +56,7 @@ struct PackagesView: View {
                 ForEach(shown) { package in
                     Button { chosen = package } label: { row(package) }
                         .buttonStyle(.plain)
-                        .disabled(downloading != nil || model.transfer?.isRunning == true)
+                        .disabled(model.transfer?.isRunning == true)
                 }
 
                 if store.packages.isEmpty, store.state == .idle {
@@ -141,65 +134,14 @@ struct PackagesView: View {
         .padding(.vertical, 2)
     }
 
-    /// Downloads here, installs there. The sheet closes on the way, because the
-    /// installing is shown by the same banner as every other transfer.
+    /// Hands the work to the model and gets out of the way: the download and
+    /// the install are shown by the same banner as every other transfer, so
+    /// this screen has nothing left to wait for.
     private func install(_ package: RepoPackage) {
         guard let url = package.url else { return }
-        complaint = nil
-        downloading = package.name
-
-        Task {
-            defer { downloading = nil }
-            do {
-                // Streamed rather than fetched in one call, for two reasons: a
-                // repository that stops answering half way is otherwise
-                // indistinguishable from a slow one, and a download with no
-                // number next to it looks stuck even when it is not.
-                var request = URLRequest(url: url)
-                request.setValue("Telesphoreo APT-HTTP/1.0.592", forHTTPHeaderField: "User-Agent")
-                request.setValue("iPhone12,1", forHTTPHeaderField: "X-Machine")
-                request.setValue("14.0", forHTTPHeaderField: "X-Firmware")
-                request.timeoutInterval = 60
-
-                let (stream, response) = try await URLSession.shared.bytes(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    complaint = L("Репозиторий не отдал файл (%d).",
-                                  (response as? HTTPURLResponse)?.statusCode ?? 0)
-                    return
-                }
-
-                let expected = max(response.expectedContentLength, package.size)
-                var body = Data()
-                body.reserveCapacity(Int(max(expected, 0)))
-                var shown = Date.distantPast
-                for try await byte in stream {
-                    body.append(byte)
-                    if Date().timeIntervalSince(shown) > 0.2 {
-                        shown = Date()
-                        downloading = expected > 0
-                            ? L("%@ — %d%%", package.name, Int(Int64(body.count) * 100 / expected))
-                            : L("%@ — %d КБ", package.name, body.count / 1024)
-                    }
-                }
-                let file = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("download.deb")
-                try? FileManager.default.removeItem(at: file)
-                try body.write(to: file)
-                // Named after the package: dpkg does not care, but the banner
-                // and the log do, and `CFNetworkDownload_xxx.tmp` tells nobody
-                // anything.
-                let named = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("\(package.id)_\(package.version).deb")
-                try? FileManager.default.removeItem(at: named)
-                try FileManager.default.moveItem(at: file, to: named)
-
-                dismiss()
-                model.installDEB(named)
-            }
-            catch {
-                complaint = error.localizedDescription
-            }
-        }
+        dismiss()
+        model.installFromRepo(name: package.name, id: package.id, version: package.version,
+                              url: url, size: package.size)
     }
 }
 

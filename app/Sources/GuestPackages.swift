@@ -91,8 +91,18 @@ enum GuestPackages {
         "queue=\(queue)",
         "mkdir -p \"$queue\"",
         "chmod 777 \"$queue\"",
+        // Whoever was here before steps aside. Two helpers on one queue is not
+        // fatal — they race for requests and both answer — but it is a slow
+        // guest, and every extra one costs it.
+        "old=$(cat \"$queue/pid\" 2>/dev/null || echo 0)",
+        "[ \"$old\" != 0 ] && [ \"$old\" != $$ ] && kill -9 \"$old\" 2>/dev/null",
         "echo $$ > \"$queue/pid\"",
         "trap \"rm -f $queue/pid\" EXIT",
+        // Woken rather than polling. A bash loop that wakes three times a
+        // second costs nothing on a phone and a great deal in a guest this
+        // slow — every wake is instructions somebody has to translate, and it
+        // was taking bandwidth away from the guest's own work.
+        "[ -p \"$queue/wake\" ] || { rm -f \"$queue/wake\"; mkfifo -m 666 \"$queue/wake\"; }",
         "while true; do",
         "    for req in \"$queue\"/*.req; do",
         "        [ -e \"$req\" ] || continue",
@@ -136,7 +146,9 @@ enum GuestPackages {
         "        esac",
         "        echo $? > \"$id.rc\"",
         "    done",
-        "    sleep 0.3",
+        // The timeout is a safety net, not a schedule: if a wake-up is ever
+        // missed the queue is still looked at once a minute.
+        "    read -r -t 60 _ < \"$queue/wake\" || true",
         "done",
     ]
 
@@ -172,6 +184,10 @@ enum GuestPackages {
         "printf %s\\\\n \"$@\" > \"$id.tmp\"",
         "touch \"$id.out\" \"$id.status\"",
         "mv \"$id.tmp\" \"$id.req\"",
+        // Wakes the helper. In the background because opening the pipe waits
+        // for the other end, and the helper may still be busy with the last
+        // request — which is fine: it will find this one when it comes back.
+        "(echo x > \"$queue/wake\" &) 2>/dev/null",
         "tail -n +1 -f \"$id.out\" 2>/dev/null &",
         "tail_pid=$!",
         "status_pid=0",
@@ -419,8 +435,12 @@ enum GuestPackages {
                 // waiting on them any more.
                 "mkdir -p \(queue)",
                 "chmod 777 \(queue)",
-                "rm -f \(queue)/*.req \(queue)/*.out \(queue)/*.rc \(queue)/*.tmp \(queue)/*.status",
-                "pkill -f cydo-root.sh",
+                "rm -f \(queue)/*.req \(queue)/*.out \(queue)/*.rc \(queue)/*.tmp \(queue)/*.status \(queue)/wake",
+                // By the process list, not by name: the guest's pkill does not
+                // take `-f`, so helpers from earlier runs survived it — two of
+                // them had burned a minute of the guest's own CPU apiece,
+                // polling, which is exactly the slowdown this was meant to end.
+                "ps ax | grep '[c]ydo-root.sh' | sed 's/^ *//;s/ .*//' | xargs kill -9 2>/dev/null",
                 // In a subshell, and nothing after it on the line: a bare `&`
                 // with the marker appended behind it is a syntax error, and
                 // bash then runs none of this at all.
