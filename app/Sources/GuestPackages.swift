@@ -76,32 +76,54 @@ enum GuestPackages {
 
     private static let queue = "/var/tmp/inferno-cydo"
 
-    /// Runs dpkg as root for whoever asks. Started by launchd, so it is root
-    /// without needing to become it.
+    /// Runs dpkg as root for whoever asks.
+    ///
+    /// A plain background process rather than a launchd job: launchd on this
+    /// image takes its daemons from a cache (`launchd_unsecure_cache=1`), so a
+    /// plist dropped into /Library/LaunchDaemons lasts only until the guest
+    /// reboots — and a helper that is quietly gone is worse than none, because
+    /// Cydia then waits on it until the watchdog kills Cydia.
     private static let rootScript = [
         "#!/bin/bash",
-        "# Runs dpkg as root on behalf of Cydia. Installed by Inferno, because",
+        "# Runs dpkg as root on behalf of Cydia. Started by Inferno, because",
         "# nothing in this guest is setuid and cydo cannot elevate itself.",
         "set -u",
         "queue=\(queue)",
-        "for req in \"$queue\"/*.req; do",
-        "    [ -e \"$req\" ] || continue",
-        "    id=\"${req%.req}\"",
-        "    mapfile -t args < \"$req\"",
-        "    rm -f \"$req\"",
-        "    /usr/bin/dpkg \"${args[@]}\" > \"$id.out\" 2>&1",
-        "    echo $? > \"$id.rc\"",
+        "mkdir -p \"$queue\"",
+        "chmod 777 \"$queue\"",
+        "echo $$ > \"$queue/pid\"",
+        "trap \"rm -f $queue/pid\" EXIT",
+        "while true; do",
+        "    for req in \"$queue\"/*.req; do",
+        "        [ -e \"$req\" ] || continue",
+        "        id=\"${req%.req}\"",
+        "        mapfile -t args < \"$req\"",
+        "        rm -f \"$req\"",
+        "        /usr/bin/dpkg \"${args[@]}\" > \"$id.out\" 2>&1",
+        "        echo $? > \"$id.rc\"",
+        "    done",
+        "    sleep 0.3",
         "done",
     ]
 
-    /// Takes cydo's place: same arguments, same output, same exit status, only
-    /// the work happens on the other side of the queue.
+    /// Takes cydo's place: same arguments, same output, same exit status.
+    ///
+    /// Refuses at once when the helper is not running, and says why. Cydia
+    /// blocks on this call, so waiting in silence ends with the watchdog
+    /// killing Cydia — which is how the first version of this went wrong.
     private static let clientScript = [
         "#!/bin/bash",
         "# Stands in for Cydia's setuid helper. The real one is cydo.real.",
         "set -u",
         "queue=\(queue)",
-        "mkdir -p \"$queue\" 2>/dev/null",
+        "pid=$(cat \"$queue/pid\" 2>/dev/null || echo 0)",
+        // `ps`, not `kill -0`: the client runs as mobile and the helper is
+        // root's, so a signal to it comes back as "not permitted" rather than
+        // as "alive", and the client would refuse every time.
+        "if ! ps -p \"$pid\" >/dev/null 2>&1; then",
+        "    echo \"cydo: Inferno helper is not running - press Repair the package manager in the app\" >&2",
+        "    exit 2",
+        "fi",
         "id=\"$queue/$$-$RANDOM\"",
         "printf %s\\\\n \"$@\" > \"$id.tmp\"",
         "touch \"$id.out\"",
@@ -117,25 +139,6 @@ enum GuestPackages {
         "rc=$(cat \"$id.rc\" 2>/dev/null || echo 2)",
         "rm -f \"$id.out\" \"$id.rc\"",
         "exit \"$rc\"",
-    ]
-
-    private static let plist = [
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
-        "<plist version=\"1.0\">",
-        "<dict>",
-        "  <key>Label</key><string>com.inferno.cydo</string>",
-        "  <key>ProgramArguments</key>",
-        "  <array>",
-        "    <string>/bin/bash</string>",
-        "    <string>/usr/libexec/cydia/cydo-root.sh</string>",
-        "  </array>",
-        "  <key>QueueDirectories</key>",
-        "  <array><string>\(queue)</string></array>",
-        "  <key>RunAtLoad</key><false/>",
-        "  <key>KeepAlive</key><false/>",
-        "</dict>",
-        "</plist>",
     ]
 
     /// Writes a file in the guest a line at a time. One line per command on
@@ -206,29 +209,32 @@ enum GuestPackages {
             note(L("Ставлю помощника для Cydia…"))
             try write(rootScript, to: "/usr/libexec/cydia/cydo-root.sh", shell: shell)
             try write(clientScript, to: "/tmp/cydo.new", shell: shell)
-            try write(plist, to: "/tmp/com.inferno.cydo.plist", shell: shell)
             let install = [
                 "chmod 755 /usr/libexec/cydia/cydo-root.sh",
                 "test -e /usr/libexec/cydia/cydo.real || mv /usr/libexec/cydia/cydo /usr/libexec/cydia/cydo.real",
                 "cp /tmp/cydo.new /usr/libexec/cydia/cydo",
                 "chmod 755 /usr/libexec/cydia/cydo",
-                "mkdir -p /Library/LaunchDaemons \(queue)",
+                "rm -f /tmp/cydo.new",
+                // An earlier version of this shipped a launchd job. It does not
+                // survive a reboot on this image, so it is taken back out.
+                "launchctl unload /Library/LaunchDaemons/com.inferno.cydo.plist >/dev/null 2>&1",
+                "rm -f /Library/LaunchDaemons/com.inferno.cydo.plist",
+                // Requests left behind while no helper was running: nobody is
+                // waiting on them any more.
+                "mkdir -p \(queue)",
                 "chmod 777 \(queue)",
-                "cp /tmp/com.inferno.cydo.plist /Library/LaunchDaemons/com.inferno.cydo.plist",
-                // launchd refuses a job whose plist is not root's, and says so
-                // only as `Path had bad ownership/permissions`.
-                "chown root:wheel /Library/LaunchDaemons /Library/LaunchDaemons/com.inferno.cydo.plist",
-                "chmod 755 /Library/LaunchDaemons",
-                "chmod 644 /Library/LaunchDaemons/com.inferno.cydo.plist",
-                "rm -f /tmp/cydo.new /tmp/com.inferno.cydo.plist",
+                "rm -f \(queue)/*.req \(queue)/*.out \(queue)/*.rc \(queue)/*.tmp",
+                "pkill -f cydo-root.sh",
+                // In a subshell, and nothing after it on the line: a bare `&`
+                // with the marker appended behind it is a syntax error, and
+                // bash then runs none of this at all.
+                "(nohup /bin/bash /usr/libexec/cydia/cydo-root.sh >/dev/null 2>&1 &)",
             ].joined(separator: "; ")
-            if shell.line(install, timeout: 120) != 0 { complaints.append(L("Помощника не удалось разложить.")) }
-            // Already loaded is not a failure, and the exit status does not
-            // tell the two apart — the check below does.
-            shell.line("launchctl load -w /Library/LaunchDaemons/com.inferno.cydo.plist >/dev/null 2>&1",
-                       timeout: 120)
-            if shell.number("launchctl list 2>/dev/null | grep -c com.inferno.cydo") != 1 {
-                complaints.append(L("launchd не подхватил помощника — Cydia останется без прав."))
+            if shell.line(install, timeout: 180) != 0 { complaints.append(L("Помощника не удалось разложить.")) }
+            // It writes its pid as its first act, so a short wait tells a
+            // running helper from one that fell over on startup.
+            if shell.number("sleep 2; test -e \(queue)/pid; echo $?") != 0 {
+                complaints.append(L("Помощник не запустился — Cydia останется без прав."))
             }
 
             note(L("Проверяю…"))

@@ -360,8 +360,8 @@ enum L10n {
         "Проверяю базу": "Auditing the database",
         "Ставлю помощника для Cydia…": "Installing Cydia's helper…",
         "Помощника не удалось разложить.": "The helper could not be put in place.",
-        "launchd не подхватил помощника — Cydia останется без прав.":
-            "launchd did not take the helper — Cydia will stay without privileges.",
+        "Помощник не запустился — Cydia останется без прав.":
+            "The helper did not start — Cydia will stay without privileges.",
         "dpkg сказал: %@": "dpkg said: %@",
         "База dpkg на месте не найдена — Cydia может всё ещё ругаться.":
             "dpkg's database was not found where it belongs — Cydia may still complain.",
