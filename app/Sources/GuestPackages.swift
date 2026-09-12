@@ -228,35 +228,42 @@ enum GuestPackages {
         try awaitShell(serial)
         try ensureWritable(serial)
 
-        return try serial.exclusive {
+        // The carrying is one conversation and has to be: it is a sequence of
+        // commands the guest answers in order. Everything after it is a single
+        // long command, and those are left to run on their own.
+        let package: String = try serial.exclusive {
             let shell = GuestShell(serial: serial)
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
 
             note(L("Переношу пакет в гостя…"))
             try files.carry(local, to: remote, shell: shell, progress: progress, note: note)
 
-            note(L("Ставлю пакет…"))
             // The name is read before the file goes away: it is what the apps
             // below are looked up by.
-            let package = shell.text("dpkg-deb -f \(remote) Package", timeout: 300) ?? ""
-            guard let code = shell.line("dpkg -i --force-overwrite \(remote) >> \(log) 2>&1",
-                                        timeout: 1800)
-            else { throw Failure.silent(L("Ставлю пакет")) }
-
-            note(L("Настраиваю пакеты…"))
-            shell.line("dpkg --configure -a >> \(log) 2>&1", timeout: 1800)
-
-            // A package that brings an app leaves it on disk and nothing else:
-            // SpringBoard learns about it from uicache. Only about this app,
-            // though — `uicache --all` walks every app on the system, which on
-            // this guest takes minutes with SpringBoard wedged for all of them.
-            if !package.isEmpty { refreshIcons(of: package, shell: shell, note: note) }
-            shell.line("rm -f \(remote)", timeout: 60)
-
-            let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
-            if code != 0 { throw Failure.step(L("Ставлю пакет") + (said.map { ": " + $0 } ?? ""), code) }
-            return said ?? ""
+            return shell.text("dpkg-deb -f \(remote) Package", timeout: 300) ?? ""
         }
+
+        note(L("Ставлю пакет…"))
+        guard let code = runDetached("dpkg -i --force-overwrite \(remote) >> \(log) 2>&1",
+                                     serial: serial, timeout: 1800)
+        else { throw Failure.silent(L("Ставлю пакет")) }
+
+        note(L("Настраиваю пакеты…"))
+        runDetached("dpkg --configure -a >> \(log) 2>&1", serial: serial, timeout: 1800)
+
+        // A package that brings an app leaves it on disk and nothing else:
+        // SpringBoard learns about it from uicache. Only about this app, though
+        // — `uicache --all` walks every app on the system, which on this guest
+        // takes minutes with SpringBoard wedged for all of them.
+        if !package.isEmpty { refreshIcons(of: package, serial: serial, note: note) }
+
+        let said = serial.exclusive { () -> String in
+            let shell = GuestShell(serial: serial)
+            shell.line("rm -f \(remote)", timeout: 60)
+            return shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120) ?? ""
+        }
+        if code != 0 { throw Failure.step(L("Ставлю пакет") + (said.isEmpty ? "" : ": " + said), code) }
+        return said
     }
 
     /// What the guest has installed, as package name to version.
@@ -291,20 +298,21 @@ enum GuestPackages {
     static func remove(_ package: String, serial: SerialConsole) throws -> String {
         try ensureWritable(serial)
         try awaitShell(serial)
-        return try serial.exclusive {
-            let shell = GuestShell(serial: serial)
-            shell.line(": > \(log)", timeout: 60)
-            // Read before the removal: afterwards dpkg no longer knows what the
-            // package owned.
-            let apps = appPaths(of: package, shell: shell)
-            guard let code = shell.line("dpkg -r \(package) >> \(log) 2>&1", timeout: 1800) else {
-                throw Failure.silent(L("Удаляю пакет"))
-            }
-            for app in apps { shell.line("uicache -p \(app) >> \(log) 2>&1", timeout: 600) }
-            let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
-            if code != 0 { throw Failure.step(L("Удаляю пакет") + (said.map { ": " + $0 } ?? ""), code) }
-            return said ?? ""
+        serial.exclusive { GuestShell(serial: serial).line(": > \(log)", timeout: 60) }
+        // Read before the removal: afterwards dpkg no longer knows what the
+        // package owned.
+        let apps = appPaths(of: package, serial: serial)
+
+        guard let code = runDetached("dpkg -r \(package) >> \(log) 2>&1", serial: serial, timeout: 1800)
+        else { throw Failure.silent(L("Удаляю пакет")) }
+        for app in apps { runDetached("uicache -p \(app) >> \(log) 2>&1", serial: serial, timeout: 1800) }
+
+        let said = serial.exclusive {
+            GuestShell(serial: serial).text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240",
+                                            timeout: 120) ?? ""
         }
+        if code != 0 { throw Failure.step(L("Удаляю пакет") + (said.isEmpty ? "" : ": " + said), code) }
+        return said
     }
 
     /// Waits for a shell on the console instead of demanding one at once.
@@ -345,20 +353,55 @@ enum GuestPackages {
         throw Failure.stillReadOnly
     }
 
+    /// Runs a long command in the guest without sitting on the console.
+    ///
+    /// dpkg can take minutes here, and holding the conversation lock for all of
+    /// them meant nothing else could say a word — the shell pane waited for its
+    /// turn until it looked broken. The command is started detached, its status
+    /// left in a file, and the console is only taken for the asking: a short
+    /// check every few seconds.
+    @discardableResult
+    private static func runDetached(_ command: String, serial: SerialConsole,
+                                    timeout: TimeInterval) -> Int64? {
+        let done = "/var/mobile/.inferno/step.rc"
+        let started = serial.exclusive { () -> Bool in
+            let shell = GuestShell(serial: serial)
+            shell.line("rm -f \(done)", timeout: 60)
+            return shell.line("(nohup /bin/bash -c '{ \(command) ;}; echo $? > \(done)' >/dev/null 2>&1 &)",
+                              timeout: 120) == 0
+        }
+        guard started else { return nil }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 3)
+            let code = serial.exclusive { () -> Int64? in
+                let shell = GuestShell(serial: serial)
+                guard shell.number("test -e \(done); echo $?", timeout: 60) == 0 else { return nil }
+                return shell.number("cat \(done)", timeout: 60)
+            }
+            if let code { return code }
+        }
+        return nil
+    }
+
     /// The `/Applications` entries a package owns, if any.
-    private static func appPaths(of package: String, shell: GuestShell) -> [String] {
-        let listed = shell.text("dpkg -L \(package) 2>/dev/null | grep -E '^/Applications/[^/]+\\.app$' | tr '\\n' ' '",
-                                timeout: 300) ?? ""
+    private static func appPaths(of package: String, serial: SerialConsole) -> [String] {
+        let listed = serial.exclusive {
+            GuestShell(serial: serial).text(
+                "dpkg -L \(package) 2>/dev/null | grep -E '^/Applications/[^/]+\\.app$' | tr '\\n' ' '",
+                timeout: 300) ?? ""
+        }
         return listed.split(separator: " ").map(String.init)
     }
 
     /// Shows SpringBoard what a package brought, and nothing else.
-    private static func refreshIcons(of package: String, shell: GuestShell,
+    private static func refreshIcons(of package: String, serial: SerialConsole,
                                      note: @escaping (String) -> Void) {
-        let apps = appPaths(of: package, shell: shell)
+        let apps = appPaths(of: package, serial: serial)
         guard !apps.isEmpty else { return }
         note(L("Показываю приложение SpringBoard…"))
-        for app in apps { shell.line("uicache -p \(app) >> \(log) 2>&1", timeout: 600) }
+        for app in apps { runDetached("uicache -p \(app) >> \(log) 2>&1", serial: serial, timeout: 1800) }
     }
 
     /// Restarts SpringBoard.
@@ -440,26 +483,29 @@ enum GuestPackages {
         // for outside the lock, so the shell pane can still open meanwhile.
         try awaitShell(serial)
 
+        serial.exclusive {
+            GuestShell(serial: serial).line("mkdir -p /var/mobile/.inferno; : > \(log)", timeout: 60)
+        }
+
+        // Each step on its own, and the long ones detached: firmware.sh and
+        // dpkg take minutes here, and holding the console for them is what made
+        // the shell pane look broken while a repair was running.
+        for step in steps {
+            note(step.title + "…")
+            guard let code = runDetached(step.command, serial: serial, timeout: step.timeout) else {
+                if step.fatal { throw Failure.silent(step.title) }
+                complaints.append(L("«%@» не ответил вовремя.", step.title))
+                continue
+            }
+            guard code == 0 else {
+                if step.fatal { throw Failure.step(step.title, code) }
+                complaints.append(L("«%@» вернул %d.", step.title, Int(code)))
+                continue
+            }
+        }
+
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            shell.line("mkdir -p /var/mobile/.inferno; : > \(log)", timeout: 60)
-
-
-            for step in steps {
-                note(step.title + "…")
-                guard let code = shell.line(step.command, timeout: step.timeout) else {
-                    if step.fatal { throw Failure.silent(step.title) }
-                    complaints.append(L("«%@» не ответил вовремя.", step.title))
-                    shell.reset()
-                    continue
-                }
-                guard code == 0 else {
-                    if step.fatal { throw Failure.step(step.title, code) }
-                    complaints.append(L("«%@» вернул %d.", step.title, Int(code)))
-                    continue
-                }
-            }
-
             // The stand-in for the setuid helper. Written every time: it is
             // cheap, and an image where Cydia was reinstalled has the original
             // back in place.
