@@ -186,7 +186,9 @@ enum GuestPackages {
         }
     }
 
-    private static var steps: [Step] {
+    /// What a guest loses on every reboot, and what therefore has to be done
+    /// again each time the machine starts. Seconds, not minutes.
+    private static var fastSteps: [Step] {
         [
             Step(title: L("Перемонтирую корень на запись"), command: "mount -uw /",
                  timeout: 60, fatal: true),
@@ -195,8 +197,13 @@ enum GuestPackages {
                  timeout: 60, fatal: true),
             Step(title: L("Ставлю ссылку на базу dpkg"), command: "ln -sfn /Library/dpkg /var/lib/dpkg",
                  timeout: 60, fatal: true),
-            // Slow ones. On a phone the guest runs several times slower than the
-            // rig, where these take about twenty seconds and a minute.
+        ]
+    }
+
+    /// Needed once per image and slow enough to be worth a button: on a phone
+    /// these two are minutes, and they hold the console while they run.
+    private static var slowSteps: [Step] {
+        [
             Step(title: L("Регистрирую прошивку"),
                  command: "/usr/libexec/cydia/firmware.sh >> \(log) 2>&1",
                  timeout: 900, fatal: false),
@@ -209,7 +216,20 @@ enum GuestPackages {
 
     /// Runs the repair. `note` is called with the step that is about to run, and
     /// returns the lines worth showing when it is over.
+    /// Everything, including the slow steps. This is the button.
     static func repair(serial: SerialConsole, note: @escaping (String) -> Void) throws -> [String] {
+        try run(serial: serial, steps: fastSteps + slowSteps, note: note)
+    }
+
+    /// Only what the reboot undid: the remount, the folders, the helper. Run at
+    /// every start, quietly, because without it Cydia is broken again and the
+    /// error it gives says nothing about why.
+    static func prepare(serial: SerialConsole) throws -> [String] {
+        try run(serial: serial, steps: fastSteps, note: { _ in })
+    }
+
+    private static func run(serial: SerialConsole, steps: [Step],
+                            note: @escaping (String) -> Void) throws -> [String] {
         var complaints: [String] = []
 
         try serial.exclusive {

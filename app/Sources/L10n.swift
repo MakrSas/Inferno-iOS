@@ -340,6 +340,12 @@ enum L10n {
             "The app needs iOS %d and the guest is iOS %d — it is installed, but will not launch.",
 
         "Починить менеджер пакетов": "Repair the package manager",
+        "Патчи": "Patches",
+        "Чинить менеджер пакетов при запуске": "Repair the package manager at start",
+        "Перезагрузка гостя возвращает корень в режим «только чтение» и уносит корневого помощника, без которого Cydia отвечает «cydo returned an error code (2)». Это чинится заново при каждом запуске машины — секунды. Долгие шаги, нужные один раз на образ, остались на кнопке в меню.":
+            "A guest reboot puts the root back to read-only and takes the root helper with it, and without those Cydia answers `cydo returned an error code (2)`. That much is redone at every start and takes seconds. The slow steps, needed once per image, stay on the button in the menu.",
+        "Пакеты: гость подготовлен.": "Packages: the guest is prepared.",
+        "Пакеты: подготовить не вышло — %@": "Packages: could not prepare — %@",
         "Чиню менеджер пакетов…": "Repairing the package manager…",
         "Менеджер пакетов починен. Попробуйте Cydia снова.":
             "The package manager is repaired. Try Cydia again.",

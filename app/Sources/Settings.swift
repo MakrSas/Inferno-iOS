@@ -49,6 +49,9 @@ final class Settings: ObservableObject {
     @AppStorage("guestAudio") var guestAudio: Bool = false {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("autoRepairPackages") var autoRepairPackages: Bool = true {
+        willSet { objectWillChange.send() }
+    }
     @AppStorage("smoothUpscale") var smoothUpscale: Bool = true {
         willSet { objectWillChange.send() }
     }
@@ -373,6 +376,14 @@ private struct MachineSettings: View {
                 Text(L("Память"))
             } footer: {
                 Text(L("Потолок процесса на iPhone — ровно 3 ГиБ, и в него входит всё остальное, что держит приложение."))
+            }
+
+            Section {
+                Toggle(L("Чинить менеджер пакетов при запуске"), isOn: $settings.autoRepairPackages)
+            } header: {
+                Text(L("Патчи"))
+            } footer: {
+                Text(L("Перезагрузка гостя возвращает корень в режим «только чтение» и уносит корневого помощника, без которого Cydia отвечает «cydo returned an error code (2)». Это чинится заново при каждом запуске машины — секунды. Долгие шаги, нужные один раз на образ, остались на кнопке в меню."))
             }
 
             Section {

@@ -178,6 +178,7 @@ final class VMModel: ObservableObject {
                     self.serial.attachInput(port: self.config.serialPort)
                 }
                 if self.config.network { self.watchNetwork() }
+                if Settings.shared.autoRepairPackages { self.preparePackages() }
                 // Report what the machine is doing once it has had time to boot.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     self.inspectMachine()
@@ -234,6 +235,39 @@ final class VMModel: ObservableObject {
             serial.send("/usr/sbin/ipconfig set en0 DHCP\n")
         }
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
+    }
+
+    /// Re-does the part of the package repair that a guest reboot undoes.
+    ///
+    /// The remount and the root helper do not survive a restart, and without
+    /// them Cydia fails with `cydo returned an error code (2)` — an error that
+    /// says nothing about why. Only the quick half runs here; the slow half is
+    /// needed once per image and stays on the button.
+    private func preparePackages() {
+        let serial = self.serial
+        var attempts = 0
+
+        func attempt() {
+            guard isRunning else { return }
+            guard serial.interactive else {
+                attempts += 1
+                guard attempts < 150 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { attempt() }
+                return
+            }
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    let complaints = try GuestPackages.prepare(serial: serial)
+                    let tail = complaints.isEmpty ? "" : " " + complaints.joined(separator: " ")
+                    LogCapture.shared.note(L("Пакеты: гость подготовлен.") + tail)
+                }
+                catch {
+                    LogCapture.shared.note(L("Пакеты: подготовить не вышло — %@", error.localizedDescription))
+                }
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { attempt() }
     }
 
     /// Puts the guest's package manager back together — the fix for Cydia's
@@ -693,16 +727,19 @@ struct ControlMenu: View {
                     model.fixNetwork()
                 }
                 .disabled(!model.isRunning)
-                Button(L("Починить менеджер пакетов"), systemImage: "shippingbox") {
-                    model.repairPackages()
-                }
-                .disabled(!model.isRunning || model.transfer?.isRunning == true)
                 Button(role: .destructive) {
                     confirmQuit = true
                 } label: {
                     Label(L("Выключить машину…"), systemImage: "power")
                 }
                 .disabled(!model.isRunning)
+            }
+
+            Section(L("Патчи")) {
+                Button(L("Починить менеджер пакетов"), systemImage: "shippingbox") {
+                    model.repairPackages()
+                }
+                .disabled(!model.isRunning || model.transfer?.isRunning == true)
             }
 
             Section(L("Файлы")) {
