@@ -359,7 +359,7 @@ enum L10n {
         "Удаляю пакет": "Removing the package",
         "Перезапускаю SpringBoard…": "Restarting SpringBoard…",
         "SpringBoard: %@": "SpringBoard: %@",
-        "Показываю приложения SpringBoard…": "Showing the apps to SpringBoard…",
+        "Показываю приложение SpringBoard…": "Showing the app to SpringBoard…",
         "Источники": "Sources",
         "Поиск пакета": "Search for a package",
         "Читаю %@…": "Reading %@…",

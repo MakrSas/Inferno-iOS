@@ -218,6 +218,9 @@ enum GuestPackages {
             try files.carry(local, to: remote, shell: shell, progress: progress, note: note)
 
             note(L("Ставлю пакет…"))
+            // The name is read before the file goes away: it is what the apps
+            // below are looked up by.
+            let package = shell.text("dpkg-deb -f \(remote) Package", timeout: 300) ?? ""
             guard let code = shell.line("dpkg -i --force-overwrite \(remote) >> \(log) 2>&1",
                                         timeout: 1800)
             else { throw Failure.silent(L("Ставлю пакет")) }
@@ -226,10 +229,10 @@ enum GuestPackages {
             shell.line("dpkg --configure -a >> \(log) 2>&1", timeout: 1800)
 
             // A package that brings an app leaves it on disk and nothing else:
-            // SpringBoard learns about it from uicache, and without that the
-            // install looks like it did nothing at all.
-            note(L("Показываю приложения SpringBoard…"))
-            shell.line("uicache --all >> \(log) 2>&1", timeout: 1800)
+            // SpringBoard learns about it from uicache. Only about this app,
+            // though — `uicache --all` walks every app on the system, which on
+            // this guest takes minutes with SpringBoard wedged for all of them.
+            if !package.isEmpty { refreshIcons(of: package, shell: shell, note: note) }
             shell.line("rm -f \(remote)", timeout: 60)
 
             let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
@@ -272,14 +275,33 @@ enum GuestPackages {
             let shell = GuestShell(serial: serial)
             guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
             shell.line(": > \(log)", timeout: 60)
+            // Read before the removal: afterwards dpkg no longer knows what the
+            // package owned.
+            let apps = appPaths(of: package, shell: shell)
             guard let code = shell.line("dpkg -r \(package) >> \(log) 2>&1", timeout: 1800) else {
                 throw Failure.silent(L("Удаляю пакет"))
             }
-            shell.line("uicache --all >> \(log) 2>&1", timeout: 1800)
+            for app in apps { shell.line("uicache -p \(app) >> \(log) 2>&1", timeout: 600) }
             let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
             if code != 0 { throw Failure.step(L("Удаляю пакет") + (said.map { ": " + $0 } ?? ""), code) }
             return said ?? ""
         }
+    }
+
+    /// The `/Applications` entries a package owns, if any.
+    private static func appPaths(of package: String, shell: GuestShell) -> [String] {
+        let listed = shell.text("dpkg -L \(package) 2>/dev/null | grep -E '^/Applications/[^/]+\\.app$' | tr '\\n' ' '",
+                                timeout: 300) ?? ""
+        return listed.split(separator: " ").map(String.init)
+    }
+
+    /// Shows SpringBoard what a package brought, and nothing else.
+    private static func refreshIcons(of package: String, shell: GuestShell,
+                                     note: @escaping (String) -> Void) {
+        let apps = appPaths(of: package, shell: shell)
+        guard !apps.isEmpty else { return }
+        note(L("Показываю приложение SpringBoard…"))
+        for app in apps { shell.line("uicache -p \(app) >> \(log) 2>&1", timeout: 600) }
     }
 
     /// Restarts SpringBoard.
