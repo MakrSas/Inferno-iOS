@@ -904,6 +904,11 @@ struct TerminalView: View {
     /// The shell channel is its own object, so watching the model alone would
     /// miss everything it does.
     @ObservedObject private var shell: ShellChannel
+    /// And so is the console: its text arrives on its own object, so a view
+    /// that watched only the model would redraw for everything except the one
+    /// thing it is here to show — which looked like a console that updates
+    /// whenever you leave it and come back.
+    @ObservedObject private var serial: SerialConsole
     @ObservedObject private var log = LogCapture.shared
     @ObservedObject private var settings = Settings.shared
     @StateObject private var screen = GuestScreen()
@@ -917,6 +922,7 @@ struct TerminalView: View {
     init(model: VMModel) {
         _model = ObservedObject(wrappedValue: model)
         _shell = ObservedObject(wrappedValue: model.shell)
+        _serial = ObservedObject(wrappedValue: model.serial)
     }
 
     private var source: Source { Source(rawValue: sourceName) ?? .emulator }
@@ -925,7 +931,7 @@ struct TerminalView: View {
         guard !command.isEmpty else { return }
         switch source {
         case .shell:  shell.send(command)
-        default:      model.serial.send(command + "\n")
+        default:      serial.send(command + "\n")
         }
         command = ""
     }
@@ -936,14 +942,14 @@ struct TerminalView: View {
     private var acceptsInput: Bool {
         switch source {
         case .shell:        return shell.isUp
-        case .guestConsole: return model.serial.interactive
+        case .guestConsole: return serial.interactive
         case .emulator:     return false
         }
     }
 
     /// The indicator at the bottom belongs to whatever is on screen.
     private var linkIsGood: Bool {
-        source == .shell ? shell.isUp : model.serial.connected
+        source == .shell ? shell.isUp : serial.connected
     }
 
     /// Opening the pane is the request to open the channel. A failure is not
@@ -985,7 +991,7 @@ struct TerminalView: View {
 
     @ViewBuilder
     private func consolePane(_ fitted: CGFloat) -> some View {
-        if model.serial.text.isEmpty {
+        if serial.text.isEmpty {
             Text(L("Ожидание вывода консоли…"))
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -1034,7 +1040,7 @@ struct TerminalView: View {
                     }
                     .buttonStyle(.bordered)
                 }
-                .disabled(!model.serial.interactive)
+                .disabled(!serial.interactive)
             }
             Spacer()
         }
@@ -1064,8 +1070,8 @@ struct TerminalView: View {
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: acceptsInput ? 60 : 72) }
             }
             .onAppear {
-                screen.rebuild(from: model.serial.text, hideKernel: settings.hideKernel,
-                               sequence: model.serial.sequence)
+                screen.rebuild(from: serial.text, hideKernel: settings.hideKernel,
+                               sequence: serial.sequence)
                 pin += 1
                 openShellIfNeeded()
             }
@@ -1073,13 +1079,13 @@ struct TerminalView: View {
                 pin += 1
                 openShellIfNeeded()
             }
-            .onChange(of: model.serial.sequence) { seq in
-                screen.feed(model.serial.chunk, sequence: seq)
+            .onChange(of: serial.sequence) { seq in
+                screen.feed(serial.chunk, sequence: seq)
             }
             .onChange(of: shell.state) { _ in pin += 1 }
             .onChange(of: settings.hideKernel) { on in
-                screen.rebuild(from: model.serial.text, hideKernel: on,
-                               sequence: model.serial.sequence)
+                screen.rebuild(from: serial.text, hideKernel: on,
+                               sequence: serial.sequence)
                 pin += 1
             }
 
