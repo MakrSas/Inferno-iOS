@@ -806,7 +806,10 @@ struct RootView: View {
                 if let transfer = model.transfer {
                     TransferBanner(state: transfer) { model.transfer = nil }
                         .padding(.horizontal, 12)
-                        .padding(.bottom, 12)
+                        // Above the command line, not on top of it: the terminal
+                        // keeps its prompt at the bottom, and an install can run
+                        // for minutes with somebody waiting to type.
+                        .padding(.bottom, pane == .terminal ? 76 : 12)
                 }
             }
             // Coming back from StikDebug is exactly when the answer changes.
