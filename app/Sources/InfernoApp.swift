@@ -237,6 +237,45 @@ final class VMModel: ObservableObject {
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
     }
 
+    /// Installs a `.deb` without Cydia: the guest is too slow for Cydia to
+    /// survive its own packager, and this path has nothing watching a clock.
+    func installDEB(_ url: URL) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        let name = url.lastPathComponent
+        transfer = .running(title: L("→ пакет %@", name), done: 0, total: 0)
+        LogCapture.shared.note(L("Пакеты: ставлю %@", name))
+        let serial = self.serial
+        let files = self.files
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            var phase = L("→ пакет %@", name)
+            do {
+                var last = Date.distantPast
+                let said = try GuestPackages.installDeb(url, serial: serial, files: files, progress: { done, total in
+                    guard Date().timeIntervalSince(last) > 0.1 || done == total else { return }
+                    last = Date()
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: phase, done: done, total: total)
+                    }
+                }, note: { line in
+                    phase = line
+                    DispatchQueue.main.async { self.transfer = .running(title: line, done: 0, total: 0) }
+                })
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Пакет установлен.") + (said.isEmpty ? "" : "\n" + said))
+                    LogCapture.shared.note(L("Пакеты: %@ установлен.", name))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note(L("Пакеты: %@ — %@", name, error.localizedDescription))
+                }
+            }
+        }
+    }
+
     /// Re-does the part of the package repair that a guest reboot undoes.
     ///
     /// The remount and the root helper do not survive a restart, and without
@@ -566,6 +605,7 @@ struct RootView: View {
     @State private var fullScreen = false
     @State private var pickFile = false
     @State private var pickIPA = false
+    @State private var pickDEB = false
     @State private var askPath = false
     @State private var guestPath = "/var/mobile/"
     /// Where the button sits, as a fraction of the view, so that it stays put
@@ -624,7 +664,8 @@ struct RootView: View {
                         if !fullScreen {
                             GeometryReader { geo in
                                 ControlMenu(model: model, pane: $pane, fullScreen: $fullScreen,
-                                            pickFile: $pickFile, pickIPA: $pickIPA, askPath: $askPath)
+                                            pickFile: $pickFile, pickIPA: $pickIPA, pickDEB: $pickDEB,
+                                            askPath: $askPath)
                                     .position(menuPoint(in: geo))
                                     // Simultaneous, so a tap still opens the
                                     // menu and only a real drag moves it.
@@ -649,6 +690,11 @@ struct RootView: View {
             // presented, so they do not fight the way two sheets would.
             .fileImporter(isPresented: $pickIPA, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result { model.installIPA(url) }
+            }
+            // A third importer, for the same reason as the second: only one is
+            // ever presented, so they do not fight the way sheets would.
+            .fileImporter(isPresented: $pickDEB, allowedContentTypes: [.item]) { result in
+                if case .success(let url) = result { model.installDEB(url) }
             }
             .alert(L("Забрать файл из гостя"), isPresented: $askPath) {
                 TextField(L("Путь в госте"), text: $guestPath)
@@ -691,6 +737,8 @@ struct ControlMenu: View {
     @Binding var fullScreen: Bool
     @Binding var pickFile: Bool
     @Binding var pickIPA: Bool
+    @Binding var pickDEB: Bool
+    @State private var showPackages = false
     @Binding var askPath: Bool
     @State private var showSettings = false
     @State private var confirmQuit = false
@@ -739,8 +787,14 @@ struct ControlMenu: View {
                 Button(L("Починить менеджер пакетов"), systemImage: "shippingbox") {
                     model.repairPackages()
                 }
-                .disabled(!model.isRunning || model.transfer?.isRunning == true)
+                Button(L("Менеджер пакетов"), systemImage: "square.grid.2x2") {
+                    showPackages = true
+                }
+                Button(L("Установить .deb в гостя…"), systemImage: "shippingbox.and.arrow.backward") {
+                    pickDEB = true
+                }
             }
+            .disabled(!model.isRunning || model.transfer?.isRunning == true)
 
             Section(L("Файлы")) {
                 Button(L("Отправить файл в гостя…"), systemImage: "square.and.arrow.up") {
@@ -769,6 +823,7 @@ struct ControlMenu: View {
             glassDisc
         }
         .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+        .sheet(isPresented: $showPackages) { PackagesView(model: model) }
         .confirmationDialog(L("Выключить машину?"), isPresented: $confirmQuit, titleVisibility: .visible) {
             Button(L("Выключить"), role: .destructive) { model.shutdown() }
             Button(L("Отмена"), role: .cancel) {}

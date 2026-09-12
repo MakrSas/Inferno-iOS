@@ -44,6 +44,12 @@ do {
         try FileManager.default.moveItem(at: got, to: local)
         let size = (try? FileManager.default.attributesOfItem(atPath: local.path)[.size] as? Int) ?? 0
         print("== \(size ?? 0) Б за \(String(format: "%.1f", Date().timeIntervalSince(started))) с")
+    } else if mode == "deb" {
+        let deb = URL(fileURLWithPath: CommandLine.arguments[2])
+        print("== ставлю \(deb.lastPathComponent)")
+        let said = try GuestPackages.installDeb(deb, serial: serial, files: files,
+                                                progress: { _, _ in }, note: { print("   \($0)") })
+        print("== готово: \(said)")
     } else if mode == "packages" {
         print("== чиню менеджер пакетов")
         let complaints = try GuestPackages.repair(serial: serial, note: { print("   \($0)") })

@@ -172,6 +172,44 @@ enum GuestPackages {
         "exit \"$rc\"",
     ]
 
+    /// Installs a `.deb` in the guest, without Cydia in the way.
+    ///
+    /// Cydia blocks its own main thread while dpkg runs, and on a guest this
+    /// slow that is long enough for iOS to kill it as unresponsive — which
+    /// also kills the helper's client and leaves dpkg holding the database.
+    /// Here nothing is waiting on a screen, so a package can take its minutes.
+    ///
+    /// `--force-overwrite` because the bootstrap and the packages it came from
+    /// disagree about who owns a handful of files in /etc/apt; every install in
+    /// this image trips over that and nothing else.
+    static func installDeb(_ local: URL, serial: SerialConsole, files: GuestFiles,
+                           progress: @escaping (Int64, Int64) -> Void,
+                           note: @escaping (String) -> Void) throws -> String {
+        let remote = "/var/mobile/.inferno/install.deb"
+
+        return try serial.exclusive {
+            let shell = GuestShell(serial: serial)
+            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
+
+            note(L("Переношу пакет в гостя…"))
+            try files.carry(local, to: remote, shell: shell, progress: progress, note: note)
+
+            note(L("Ставлю пакет…"))
+            guard let code = shell.line("dpkg -i --force-overwrite \(remote) >> \(log) 2>&1",
+                                        timeout: 1800)
+            else { throw Failure.silent(L("Ставлю пакет")) }
+
+            note(L("Настраиваю пакеты…"))
+            shell.line("dpkg --configure -a >> \(log) 2>&1", timeout: 1800)
+            shell.line("rm -f \(remote)", timeout: 60)
+
+            let said = shell.text("grep -v '^$' \(log) | tail -3 | tr '\\n' ' ' | cut -c1-240", timeout: 120)
+            if code != 0 { throw Failure.step(L("Ставлю пакет") + (said.map { ": " + $0 } ?? ""), code) }
+            return said ?? ""
+        }
+    }
+
     /// Writes a file in the guest a line at a time. One line per command on
     /// purpose: the console drops bytes inside long lines, and a here-document
     /// would leave our own text sitting in the terminal while the guest is
