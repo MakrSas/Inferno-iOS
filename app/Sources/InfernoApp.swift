@@ -1474,10 +1474,13 @@ struct TransferBanner: View {
                 Text(text).font(.footnote)
             }
             Spacer(minLength: 0)
-            if !state.isRunning {
-                Button(action: dismiss) {
-                    Image(systemName: "xmark").font(.footnote.weight(.semibold))
-                }
+            // Dismissable while it runs, too. The work carries on — this only
+            // takes the banner off the screen — and without it a long install
+            // sat on top of the terminal's command line with no way to move it,
+            // which is exactly when somebody wants to ask the guest what is
+            // going on.
+            Button(action: dismiss) {
+                Image(systemName: "xmark").font(.footnote.weight(.semibold))
             }
         }
         .padding(12)
