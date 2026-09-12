@@ -251,9 +251,13 @@ final class ShellChannel: ObservableObject {
         // One conversation: the two lines only mean anything together.
         let mark = marker
         DispatchQueue.global(qos: .userInitiated).async {
+            // One line, and it carries its own marker. Two lines could be
+            // separated by somebody else writing to the console between them,
+            // and a marker kept in a variable is lost the moment the guest's
+            // bash restarts — after which every command printed nothing and the
+            // pane looked dead.
             self.serial.exclusive {
-                self.serial.send("m=\(mark);s=S$m;e=E$m\n")
-                self.serial.send("echo \"$s\";echo ok;echo \"$e\"\n")
+                self.serial.send("m=\(mark); echo \"S$m\"; echo ok; echo \"E$m\"\n")
             }
             // The clock starts when the probe is actually sent, not when it is
             // queued. Somebody else can hold the console for a minute — the
@@ -327,7 +331,9 @@ final class ShellChannel: ObservableObject {
             }
         case .console:
             screen.append("\u{1B}[36m# \u{1B}[0m" + command + "\r\n")
-            serial.send("echo \"$s\";{ \(command) ;} 2>&1;r=$?;echo \"$e $r\"\n")
+            // The marker is set on this line too, for the same reason: nothing
+            // is remembered between commands.
+            serial.send("m=\(marker); echo \"S$m\"; { \(command) ;} 2>&1; r=$?; echo \"E$m $r\"\n")
         case nil:
             break
         }
