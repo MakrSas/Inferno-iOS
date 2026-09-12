@@ -99,7 +99,22 @@ enum GuestPackages {
         "        id=\"${req%.req}\"",
         "        mapfile -t args < \"$req\"",
         "        rm -f \"$req\"",
-        "        /usr/bin/dpkg \"${args[@]}\" > \"$id.out\" 2>&1",
+        "        printf %s\\\\n \"--- $id\" \"${args[@]}\" >> \"$queue/args.log\"",
+        // apt hands dpkg an open file descriptor to report progress on. It
+        // cannot cross into this process, and dpkg refuses to start without
+        // the one it was told about, so those arguments are dropped: apt then
+        // shows no progress bar and everything else works.
+        "        keep=()",
+        "        skip=0",
+        "        for a in \"${args[@]}\"; do",
+        "            if [ $skip = 1 ]; then skip=0; continue; fi",
+        "            case \"$a\" in",
+        "                --status-fd|--log-fd) skip=1; continue;;",
+        "                --status-fd=*|--log-fd=*) continue;;",
+        "            esac",
+        "            keep+=(\"$a\")",
+        "        done",
+        "        /usr/bin/dpkg \"${keep[@]}\" > \"$id.out\" 2>&1",
         "        echo $? > \"$id.rc\"",
         "    done",
         "    sleep 0.3",

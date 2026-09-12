@@ -50,6 +50,7 @@ netlab/nsio-ent
 netlab/beep
 netlab/rio
 netlab/sysnd
+netlab/cydoshim
 run/
 logs/
 repro-logs/

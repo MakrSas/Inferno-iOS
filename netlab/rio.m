@@ -34,6 +34,10 @@ int main(void)
         [s setActive:YES error:&err];
         printf("active: %s\n", err ? err.description.UTF8String : "ok"); fflush(stdout);
         printf("outputs: %lu\n", (unsigned long)s.currentRoute.outputs.count); fflush(stdout);
+        printf("inputs: %lu, available inputs: %lu\n", (unsigned long)s.currentRoute.inputs.count,
+               (unsigned long)s.availableInputs.count); fflush(stdout);
+        printf("sample rate %.0f, out channels %ld, max out channels %ld\n", s.sampleRate,
+               (long)s.outputNumberOfChannels, (long)s.maximumOutputNumberOfChannels); fflush(stdout);
 
         printf("step 2: unit\n"); fflush(stdout);
         AudioComponentDescription d = { 0 };
