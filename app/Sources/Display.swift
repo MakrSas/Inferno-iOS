@@ -193,7 +193,10 @@ final class EmbeddedDisplay: GuestDisplay {
     private func report(_ tally: inout Tally) {
         let now = DispatchTime.now().uptimeNanoseconds
         let elapsed = Double(now - tally.since) / 1_000_000_000
-        guard elapsed >= 1 else { return }
+        // Once every fifteen seconds, averaged over the window. A line a second
+        // pushed everything else in the log off the screen, and the numbers it
+        // carried were the same fifteen times over.
+        guard elapsed >= 15 else { return }
         defer { tally = Tally() }
         guard Settings.shared.showFPS, let statsFn else { return }
 
