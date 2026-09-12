@@ -227,7 +227,7 @@ enum GuestPackages {
 
         return try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
 
             note(L("Переношу пакет в гостя…"))
@@ -266,7 +266,7 @@ enum GuestPackages {
 
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
             guard shell.line("dpkg-query -W -f='${Package}\t${Version}\n' > \(listing) 2>/dev/null",
                              timeout: 600) != nil
@@ -289,7 +289,7 @@ enum GuestPackages {
     static func remove(_ package: String, serial: SerialConsole) throws -> String {
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            try awaitShell(shell)
             shell.line(": > \(log)", timeout: 60)
             // Read before the removal: afterwards dpkg no longer knows what the
             // package owned.
@@ -302,6 +302,20 @@ enum GuestPackages {
             if code != 0 { throw Failure.step(L("Удаляю пакет") + (said.map { ": " + $0 } ?? ""), code) }
             return said ?? ""
         }
+    }
+
+    /// Waits for a shell on the console instead of demanding one at once.
+    ///
+    /// The guest answers `echo 1` in a moment when it is idle and in a minute
+    /// when it is not, and it is never idle right after a boot or in the middle
+    /// of a package. One look and a refusal cost a download that had already
+    /// been carried in.
+    private static func awaitShell(_ shell: GuestShell) throws {
+        for attempt in 0..<10 {
+            if shell.number("echo 1", timeout: 30) == 1 { return }
+            if attempt < 9 { Thread.sleep(forTimeInterval: 5) }
+        }
+        throw Failure.noShell
     }
 
     /// The `/Applications` entries a package owns, if any.
@@ -328,7 +342,7 @@ enum GuestPackages {
     static func respring(serial: SerialConsole) throws {
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            try awaitShell(shell)
             shell.line("killall -9 SpringBoard", timeout: 120)
         }
     }
@@ -397,7 +411,7 @@ enum GuestPackages {
             let shell = GuestShell(serial: serial)
             // Nothing is typed into a console that has no shell on it yet: the
             // commands would land in the boot log and look like they ran.
-            guard shell.number("echo 1", timeout: 30) == 1 else { throw Failure.noShell }
+            try awaitShell(shell)
             shell.line("mkdir -p /var/mobile/.inferno; : > \(log)", timeout: 60)
 
             for step in steps {
