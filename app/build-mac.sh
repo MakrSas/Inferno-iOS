@@ -7,8 +7,9 @@
 # -Dhvf=enabled), found in ../build/inferno-macos or ~/inferno-ios/build/
 # inferno-macos, or wherever INFERNO_MAC_DYLIB points.
 #
-# The app lands in app/.build-mac/Inferno.app, and a zip of it in the project
-# root beside Inferno.ipa, where builds are picked up by hand.
+# The app lands in app/.build-mac/Inferno.app, and a zip of it and a disk image
+# to install it from in the project root beside Inferno.ipa, where builds are
+# picked up by hand.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +17,7 @@ PROJECT="$(cd "$ROOT/.." && pwd)"
 BUILD="$ROOT/.build-mac"
 APP="$BUILD/Inferno.app"
 ZIP="$PROJECT/Inferno-macOS.zip"
+DMG="$PROJECT/Inferno-macOS.dmg"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 TARGET="arm64-apple-macos15.0"
 
@@ -139,7 +141,19 @@ echo "==> Packaging"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 
+# The disk image a release offers: the app beside a link to Applications, to be
+# dragged across. Made from a folder holding only those two, so nothing else
+# from the build directory ends up in it.
+STAGE="$BUILD/dmg"
+rm -rf "$STAGE" "$DMG"
+mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/Inferno.app"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname Inferno -srcfolder "$STAGE" -format UDZO -ov "$DMG" >/dev/null
+rm -rf "$STAGE"
+
 echo
 echo "Done: $APP"
 echo "      $ZIP"
-ls -lh "$ZIP"
+echo "      $DMG"
+ls -lh "$ZIP" "$DMG"

@@ -32,7 +32,7 @@ cd app && ./build.sh
 |---|---|---|---|
 | iPhone / iPad | `./build.sh` | `Inferno.ipa` | `~/inferno-ios/build/inferno` (`-Dhvf=disabled`) |
 | iPad M1/M2 с HVF, для TrollStore | `INFERNO_HVF=1 ./build.sh` | `Inferno-HVF.tipa` | `~/inferno-ios/build/inferno-hvf` + `~/inferno-ios/build/hypervisor` |
-| Mac | `./build-mac.sh` | `Inferno-macOS.zip` (само приложение — `app/.build-mac/Inferno.app`) | `~/inferno-ios/build/inferno-macos` (нативная, `-Dhvf=enabled`) |
+| Mac | `./build-mac.sh` | `Inferno-macOS.dmg` для установки и `Inferno-macOS.zip` (само приложение — `app/.build-mac/Inferno.app`) | `~/inferno-ios/build/inferno-macos` (нативная, `-Dhvf=enabled`) |
 
 **Перед каждым коммитом в `app/`** собираются все три. Минимум, если сборка
 долгая или библиотеки нет под рукой, — проверка типов под обе платформы, и
