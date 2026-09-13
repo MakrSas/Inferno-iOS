@@ -88,6 +88,11 @@ final class Settings: ObservableObject {
         willSet { objectWillChange.send() }
     }
 
+    // The guest's time zone
+    @AppStorage("guestTimeZone") var guestTimeZone: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+
     // What the guest's status bar is made to show
     @AppStorage("statusBarMode") var statusBarMode: String = GuestStatusBar.Mode.phone.rawValue {
         willSet { objectWillChange.send() }
@@ -240,6 +245,15 @@ struct SettingsView: View {
                         Label(L("Строка состояния гостя"), systemImage: "antenna.radiowaves.left.and.right")
                     }
                 }
+
+                Section {
+                    Toggle(isOn: $settings.guestTimeZone) {
+                        Label(L("Часовой пояс как на телефоне"), systemImage: "clock")
+                    }
+                } footer: {
+                    Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
+                }
+                .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
 
                 Section {
                     NavigationLink { MachineSettings() } label: {

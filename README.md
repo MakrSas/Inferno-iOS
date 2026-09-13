@@ -54,6 +54,9 @@ in English or Russian. Anything goes — see [Issues and ideas](#issues-and-idea
   your own. The guest's SMC answers with it, so the status bar, Settings and apps all see the same.
 - **A network in the guest's status bar**: Wi-Fi or cellular as the phone has it, or whatever you
   set. Only a picture — the machine has no modem and no Wi-Fi, and the guest's apps still see none.
+- **The phone's time zone in the guest.** The guest's clock is right, but its image comes with a
+  zone of its own, hours away from yours; the app gives the guest the phone's zone, and follows the
+  phone when that changes.
 - **An agent in the guest** that takes the app's requests over the NVMe namespace instead of the
   console, so one command stuck on the console no longer stalls everything else. The app puts it in
   by itself and has launchd start it on every boot.
@@ -182,8 +185,10 @@ marked so the kernel's cannot be mistaken for it, and waits for the bootstrap's 
 a phone that can be minutes. When the kernel log is too noisy to share the console with, *Over the
 network* opens it over a socket instead.
 
-**The guest's battery and status bar** are in Settings: the battery follows the phone or holds a
-figure you set, and the status bar shows the phone's network, one you make up, or is left alone.
+**The guest's battery, status bar and time zone** are in Settings: the battery follows the phone or
+holds a figure you set, the status bar shows the phone's network, one you make up, or is left alone,
+and the time zone follows the phone unless you turn that off to pick one in the guest's own
+Settings.
 
 **Settings** hold everything else: cores, memory, translator, screen, terminal, network, language,
 diagnostics, and the credits.

@@ -463,6 +463,7 @@ final class VMModel: ObservableObject {
                     LogCapture.shared.note(L("Агент готов: команды и строка состояния идут мимо консоли."))
                     // Hand it the status bar straight away, and let it keep it.
                     self.paintStatusBar(force: true)
+                    self.syncTimeZone()
                 case .unavailable(let why, let retry):
                     // Not an error: the console path stays. A guest that has not
                     // reached a shell yet is worth trying again; a build or an
@@ -571,6 +572,10 @@ final class VMModel: ObservableObject {
         func tick(_ step: Int) {
             guard isRunning, round == statusBarRounds else { return }
             repaintStatusBarQuietly()
+            // The time zone rides the same rounds. Once the guest has the
+            // phone's zone this does nothing, and a zone the phone changed to
+            // reaches the guest within a minute.
+            syncTimeZone()
             let next = step + 1 < pauses.count ? pauses[step + 1] : 60
             DispatchQueue.main.asyncAfter(deadline: .now() + next) { tick(step + 1) }
         }
@@ -601,6 +606,58 @@ final class VMModel: ObservableObject {
                     self.paintedStatusBar = look.arguments
                 case .failure(let error):
                     LogCapture.shared.note(L("Строка состояния гостя: не вышло — %@", error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    // MARK: The guest's time zone
+
+    /// The zone the guest was last given, so the same one is not sent again.
+    private var guestTimeZone: String?
+    private var timeZoneInFlight = false
+    /// A failure already written to the log, so a retry every minute does not
+    /// write it again.
+    private var timeZoneComplaint: String?
+
+    /// Gives the guest the phone's time zone, when the settings ask for it.
+    /// See `GuestTimeZone` for how. Through the agent when there is one,
+    /// otherwise over the console only when nobody else is using it; quiet
+    /// unless the zone changes or the guest says something unexpected.
+    func syncTimeZone(force: Bool = false) {
+        guard isRunning, Settings.shared.guestTimeZone, let zone = GuestTimeZone.phone else { return }
+        if force { guestTimeZone = nil }
+        guard zone != guestTimeZone, !timeZoneInFlight else { return }
+        let agent = guestAgent
+        guard agent != nil || serial.interactive else { return }
+        timeZoneInFlight = true
+        let command = GuestTimeZone.command(for: zone)
+        let serial = self.serial
+        DispatchQueue.global(qos: .utility).async {
+            var answer: String?
+            if let agent {
+                answer = agent.run(command, timeout: 30)?.output
+            } else {
+                _ = serial.ifFree { answer = GuestShell(serial: serial).text(command, timeout: 30) }
+            }
+            DispatchQueue.main.async {
+                self.timeZoneInFlight = false
+                // No answer: the console was busy or the guest slow. The next
+                // round asks again.
+                guard let answer else { return }
+                switch GuestTimeZone.outcome(of: answer, zone: zone) {
+                case .set:
+                    LogCapture.shared.note(L("Часовой пояс гостя: %@", zone))
+                    self.guestTimeZone = zone
+                case .missing:
+                    // Asking again would only get the same answer.
+                    LogCapture.shared.note(L("Часовой пояс гостя: в образе нет пояса %@.", zone))
+                    self.guestTimeZone = zone
+                case .unexpected:
+                    let said = String(answer.prefix(120))
+                    guard said != self.timeZoneComplaint else { return }
+                    self.timeZoneComplaint = said
+                    LogCapture.shared.note(L("Часовой пояс гостя: не вышло — %@", said))
                 }
             }
         }
