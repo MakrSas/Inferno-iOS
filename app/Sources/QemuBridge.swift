@@ -122,6 +122,16 @@ final class QemuBridge {
             self.afterInit?()
             let status = qemuMainLoop()
             qemuCleanup(status)
+            // Let go of the big lock, as QEMU's own main does after cleanup.
+            // qemu_init handed it to this thread, and a thread that ends holding
+            // it leaves it held for good: on a Mac, quitting then calls exit(),
+            // QEMU's exit notifiers ask for the lock first thing, and the app
+            // hangs instead of closing.
+            if let unlock = dlsym(handle, "bql_unlock"),
+               let locked = dlsym(handle, "bql_locked"),
+               unsafeBitCast(locked, to: (@convention(c) () -> Bool).self)() {
+                unsafeBitCast(unlock, to: (@convention(c) () -> Void).self)()
+            }
             self.set(.stopped(status))
         }
         // The translation buffer and device emulation want room to breathe.
