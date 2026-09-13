@@ -33,6 +33,10 @@ final class Settings: ObservableObject {
     /// this buffer shares the process's three gigabytes with the guest's own
     /// memory, and a default that wins frames by courting the memory limit is
     /// not a default. Raising it is one tap away, in Settings → Translator.
+    /// The biggest buffer known to work on a phone. With 512 MB two users'
+    /// phones stopped at the emulator's first instruction, and 256 got both
+    /// going; bigger sizes stay on offer, behind a warning.
+    static let safeTBSize = 256
     @AppStorage("tbSize") var tbSize: Int = 128 {
         willSet { objectWillChange.send() }
     }
@@ -699,6 +703,8 @@ private struct StatusBarSettings: View {
 
 private struct TranslatorSettings: View {
     @ObservedObject var settings = Settings.shared
+    /// A size over the safe one, just picked, while the warning about it is up.
+    @State private var risky: Int?
 
     var body: some View {
         Form {
@@ -728,6 +734,20 @@ private struct TranslatorSettings: View {
         }
         .navigationTitle(L("Транслятор"))
         .inlineNavigationTitle()
+        #if os(iOS)
+        // Only where the translator runs: under HVF the buffer is not used.
+        .onChange(of: settings.tbSize) { size in
+            let underHVF = settings.virtualization && HVF.probe == .available
+            if size > Settings.safeTBSize, !underHVF { risky = size }
+        }
+        .alert(L("Буфер больше 256 МБ может повесить машину"),
+               isPresented: Binding(get: { risky != nil }, set: { if !$0 { risky = nil } })) {
+            Button(L("Вернуть 256 МБ"), role: .cancel) { settings.tbSize = Settings.safeTBSize }
+            Button(L("Оставить %d МБ", risky ?? settings.tbSize), role: .destructive) {}
+        } message: {
+            Text(L("На iPhone с таким буфером эмулятор может встать на первой же инструкции: экран остаётся чёрным, консоль гостя пустая, машина не отвечает. Так уже было у пользователей, и с 256 МБ у них всё заработало. Применяется при запуске машины."))
+        }
+        #endif
     }
 }
 
