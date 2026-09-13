@@ -3,20 +3,24 @@
 #
 #   lab-up.sh [fresh]   fresh — начать с чистого состояния
 #
-# GUI=sdl — открыть окно с экраном гостя (по умолчанию окна нет).
+# GUI=sdl opens a window with the guest's screen; there is none by default.
 #
-# DISP задаёт панель: disp-scale — это пиксели на точку. scale=1 отдаёт вчетверо
-# меньше пикселей, но iOS рисует не-Retina и берёт @1x-ресурсы — интерфейс
-# «плывёт». Чтобы снять нагрузку и сохранить чёткость, лучше оставить scale=2 и
-# уменьшить панель: 750x1334 — как iPhone 8, 640x1136 — как SE.
+# DISP sets the panel. disp-scale is pixels per point: scale=1 gives four times
+# fewer pixels, but iOS then draws non-Retina and falls back to @1x artwork,
+# which makes the interface look wrong rather than small. To cut the work and
+# keep it sharp, leave scale=2 and shrink the panel instead: 752x1336 is an
+# iPhone 8, 640x1136 an SE. Widths must be a multiple of four, so that a row of
+# the frame is a multiple of sixteen bytes — at 750 the guest does not finish
+# booting.
 #
-# Звук хоста не трогаем: машина создаёт apple-mca, тот открывает выход 48 кГц,
-# а бэкенд coreaudio задаёт формат и размер буфера НА САМОМ УСТРОЙСТВЕ вывода
-# (`AudioObjectSetPropertyData`, `hw/../audio/coreaudio.m`). На Bluetooth-
-# наушниках это слышно сразу: звук всей системы садится до «рации», пока ВМ
-# жива. Гостевого звука всё равно нет — aop-audio в t8030.c закомментирован, —
-# поэтому по умолчанию отдаём машине пустой звуковой бэкенд. SOUND=1 вернёт
-# прежнее поведение.
+# The host's audio is left alone. The machine creates apple-mca, which opens a
+# 48 kHz output, and QEMU's coreaudio backend sets the format and the buffer
+# size ON THE OUTPUT DEVICE ITSELF (AudioObjectSetPropertyData, in
+# audio/coreaudio.m). On Bluetooth headphones that is heard at once: everything
+# on the system drops to walkie-talkie quality for as long as the VM runs. The
+# guest has no sound anyway — aop-audio is commented out in t8030.c — so the
+# machine is given an empty audio backend by default. SOUND=1 restores the old
+# behaviour.
 #
 # Состояние живёт в netlab/state и переживает перезапуски: оверлей поверх
 # неприкосновенного stage/InfernoData/root плюс копии мелких файлов. Базовый
@@ -45,9 +49,9 @@ fi
 mkdir -p "$LAB/L/icons"
 cp -f "$SRC/ui/icons/CKQEMUBootSplash_512x512@2x.png" "$LAB/L/icons/CKQEMUBootSplash@2x.png"
 
-# Окно SDL растягивает кадр ближайшим соседом — на нестандартном разрешении
-# это видно сразу. SDL2 читает хинты из окружения, так что пересборка не нужна;
-# linear сглаживает при любом масштабе.
+# The SDL window scales the frame with nearest-neighbour, which shows at once
+# on a non-native size. SDL2 reads hints from the environment, so no rebuild is
+# needed; linear smooths at any scale.
 export SDL_RENDER_SCALE_QUALITY="${SDL_RENDER_SCALE_QUALITY:-linear}"
 
 # The window keeps the pointer visible: the guest is driven by touches, and a
