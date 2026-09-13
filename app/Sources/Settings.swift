@@ -228,6 +228,8 @@ enum GuestPanel: String, CaseIterable {
 
 struct SettingsView: View {
     @ObservedObject var model: VMModel
+    /// Read nowhere on this screen, and kept all the same: the language is
+    /// chosen a level down, and this is what redraws the labels here after it.
     @ObservedObject var settings = Settings.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -253,13 +255,10 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle(isOn: $settings.guestTimeZone) {
-                        Label(L("Часовой пояс как на телефоне"), systemImage: "clock")
+                    NavigationLink { GeneralSettings(model: model) } label: {
+                        Label(L("Основные"), systemImage: "gearshape")
                     }
-                } footer: {
-                    Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
                 }
-                .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
 
                 Section {
                     NavigationLink { MachineSettings() } label: {
@@ -276,20 +275,6 @@ struct SettingsView: View {
                     NavigationLink { DiagnosticsSettings(model: model) } label: {
                         Label(L("Диагностика"), systemImage: "stethoscope")
                     }
-                }
-
-                Section(L("Язык")) {
-                    Picker(L("Язык"), selection: $settings.language) {
-                        ForEach(AppLanguage.allCases, id: \.rawValue) { lang in
-                            Text(lang.title).tag(lang.rawValue)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Section {
-                    LabeledContent(L("Сборка"), value: BuildInfo.stamp)
-                        .font(.footnote)
                 }
 
                 Section {
@@ -325,6 +310,8 @@ struct SettingsView: View {
 /// is how a phone saves room, and a Mac window has room.
 struct MacSettingsView: View {
     @ObservedObject var model: VMModel
+    /// Not read here either, and there for the same reason as on the phone:
+    /// the sidebar's labels have to follow the language.
     @ObservedObject var settings = Settings.shared
     @State private var page: Page? = .screen
 
@@ -373,43 +360,12 @@ struct MacSettingsView: View {
         case .network:     NetworkSettings()
         case .battery:     BatterySettings()
         case .statusBar:   StatusBarSettings(model: model)
-        case .general:     general
+        case .general:     GeneralSettings(model: model)
         case .machine:     MachineSettings()
         case .translator:  TranslatorSettings()
         case .diagnostics: DiagnosticsSettings(model: model)
         case .credits:     CreditsView()
         }
-    }
-
-    /// What sits loose on the phone's first screen: the time zone, the
-    /// language and the build.
-    private var general: some View {
-        Form {
-            Section {
-                Toggle(L("Часовой пояс как на телефоне"), isOn: $settings.guestTimeZone)
-            } footer: {
-                Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
-            }
-            .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
-
-            Section {
-                Picker(L("Язык"), selection: $settings.language) {
-                    ForEach(AppLanguage.allCases, id: \.rawValue) { lang in
-                        Text(lang.title).tag(lang.rawValue)
-                    }
-                }
-            } footer: {
-                Text(L("Изменения применяются при следующем запуске машины. Перезапустите приложение, чтобы запустить её заново."))
-            }
-
-            Section {
-                LabeledContent(L("Сборка"), value: BuildInfo.stamp)
-                Button(L("Показать папку в Finder"), systemImage: "folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([VMConfig.documents])
-                }
-            }
-        }
-        .navigationTitle(L("Основные"))
     }
 }
 #endif
@@ -535,6 +491,44 @@ private struct NetworkSettings: View {
             }
         }
         .navigationTitle(L("Сеть"))
+        .inlineNavigationTitle()
+    }
+}
+
+/// What is not about any one part of the machine: the guest's time zone, the
+/// language, the build. The same page on the phone and on the Mac; on the
+/// phone these used to sit loose on the first screen, between the links.
+private struct GeneralSettings: View {
+    @ObservedObject var model: VMModel
+    @ObservedObject var settings = Settings.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(L("Часовой пояс как на телефоне"), isOn: $settings.guestTimeZone)
+            } footer: {
+                Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
+            }
+            .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
+
+            Section {
+                Picker(L("Язык"), selection: $settings.language) {
+                    ForEach(AppLanguage.allCases, id: \.rawValue) { lang in
+                        Text(lang.title).tag(lang.rawValue)
+                    }
+                }
+            }
+
+            Section {
+                LabeledContent(L("Сборка"), value: BuildInfo.stamp)
+                #if os(macOS)
+                Button(L("Показать папку в Finder"), systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([VMConfig.documents])
+                }
+                #endif
+            }
+        }
+        .navigationTitle(L("Основные"))
         .inlineNavigationTitle()
     }
 }
