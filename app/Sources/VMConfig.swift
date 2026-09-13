@@ -10,7 +10,6 @@ struct VMConfig {
     var vncPort: UInt16 = 5900
     var serialPort: UInt16 = 4555
     var qmpPort: UInt16 = 4556
-    var tcgThreads: String = "multi"
     var tbSize: Int = 128
     /// Reverse tethering over the guest's own USB port: the emulator plays the
     /// USB host, brings up the device's CDC-NCM interface and NATs through
@@ -171,11 +170,14 @@ struct VMConfig {
             "qemu-system-aarch64",
             "-L", dataDir,
             // Multi-threaded TCG: the only acceleration available here, since
-            // iOS gives no hypervisor access to applications.
+            // iOS gives no hypervisor access to applications. Never single: the
+            // SEP and the AP cores have to move together, and on one thread the
+            // SEP panics initialising its key store, so the guest never boots.
+            // That used to be a setting, and it only ever caught people out.
             // split-wx maps the translation buffer twice — writable and
             // executable — which is what a debugger-enabled process is allowed
             // to do when MAP_JIT is refused.
-            "-accel", "tcg,thread=\(tcgThreads),tb-size=\(tbSize)"
+            "-accel", "tcg,thread=multi,tb-size=\(tbSize)"
                 + (JIT.needsSplitWX ? ",split-wx=on" : ""),
             "-M", machine,
             "-kernel", "\(data)/Restore/kernelcache.release.iphone12b",

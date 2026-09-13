@@ -4,21 +4,28 @@ import SwiftUI
 /// Everything the user can change without a rebuild.
 ///
 /// These are exactly the knobs that matter when something refuses to boot: how
-/// many cores, how much memory, whether TCG runs its vCPUs on separate threads.
+/// many cores, how much memory, how big the translation buffer is.
 /// Being able to bisect them on the device saves a build round-trip for every
 /// guess. The presentation knobs live here too, so that one screen holds
 /// everything and nothing has to be hunted for in a toolbar.
 final class Settings: ObservableObject {
     static let shared = Settings()
 
+    private init() {
+        // A count saved while 2 and 3 were still on offer would otherwise
+        // reach the command line, and leave the picker with nothing selected.
+        if cores < Settings.coreChoices[0] { cores = Settings.coreChoices[0] }
+    }
+
     // The machine
     @AppStorage("cores") var cores: Int = 4 {
         willSet { objectWillChange.send() }
     }
+    /// Nothing below 4: one core goes to the SEP, and with fewer than three
+    /// left beside it the SEP panics initialising its key store, so the guest
+    /// never boots. 2 and 3 used to be offered and only ever caught people out.
+    static let coreChoices = [4, 5, 7]
     @AppStorage("memory") var memory: String = "3G" {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("tcgThreads") var tcgThreads: String = "multi" {
         willSet { objectWillChange.send() }
     }
     /// Left at the middle of the range on purpose. Bigger is faster — measured
@@ -98,7 +105,6 @@ final class Settings: ObservableObject {
         var c = VMConfig()
         c.cores = cores
         c.memory = memory
-        c.tcgThreads = tcgThreads
         c.tbSize = tbSize
         c.network = network
         c.headless = headless
@@ -348,13 +354,7 @@ private struct MachineSettings: View {
         Form {
             Section {
                 Picker(L("Всего vCPU"), selection: $settings.cores) {
-                    ForEach([2, 3, 4, 5, 7], id: \.self) { Text("\($0)").tag($0) }
-                }
-                if settings.cores < 4 || settings.tcgThreads != "multi" {
-                    Label(L("Для Secure Enclave нужны 4 ядра И multi одновременно. При 2 ядрах или при single он паникует на инициализации хранилища ключей — проверено на обоих устройствах."),
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                    ForEach(Settings.coreChoices, id: \.self) { Text("\($0)").tag($0) }
                 }
                 if settings.cores > 4 {
                     Label(L("При 7 инициализация машины тратит ~1.4 ГБ только на служебные структуры."),
@@ -405,16 +405,6 @@ private struct TranslatorSettings: View {
     var body: some View {
         Form {
             Section {
-                Picker(L("Потоки TCG"), selection: $settings.tcgThreads) {
-                    Text("multi").tag("multi")
-                    Text("single").tag("single")
-                }
-                .pickerStyle(.segmented)
-            } footer: {
-                Text(L("single оставлен для диагностики. Гость на нём не грузится: SEP и ядра AP должны двигаться одновременно."))
-            }
-
-            Section {
                 Picker(L("Буфер трансляций"), selection: $settings.tbSize) {
                     ForEach([32, 64, 128, 256, 384, 512], id: \.self) { Text(L("%d МБ", $0)).tag($0) }
                 }
@@ -440,8 +430,8 @@ private struct DiagnosticsSettings: View {
             Section(L("Состояние")) {
                 Text(statusLine)
                 Text(jitLine)
-                Text(L("Параметры: %d vCPU, %@, tcg %@",
-                       Settings.shared.cores, Settings.shared.memory, Settings.shared.tcgThreads))
+                Text(L("Параметры: %d vCPU, %@",
+                       Settings.shared.cores, Settings.shared.memory))
             }
             .font(.footnote)
 
