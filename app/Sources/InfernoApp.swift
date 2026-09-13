@@ -1,7 +1,13 @@
 import SwiftUI
 import CoreGraphics
 import UniformTypeIdentifiers
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
+#if os(iOS)
 @main
 struct InfernoApp: App {
     init() {
@@ -29,14 +35,21 @@ struct InfernoApp: App {
 /// of the top even with the status bar hidden, which is the number that matters
 /// for keeping the guest's picture out from under it.
 enum DeviceInsets {
-    static var current: UIEdgeInsets {
-        UIApplication.shared.connectedScenes
+    static var current: ScreenInsets {
+        let insets = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow }?
             .safeAreaInsets ?? .zero
+        return ScreenInsets(top: insets.top, bottom: insets.bottom)
     }
 }
+#else
+/// A Mac window has no island and no home indicator to keep clear of.
+enum DeviceInsets {
+    static var current: ScreenInsets { ScreenInsets() }
+}
+#endif
 
 // MARK: - Model
 
@@ -1061,6 +1074,7 @@ enum Pane: String, CaseIterable {
     case terminal = "Терминал"
 }
 
+#if os(iOS)
 struct RootView: View {
     @StateObject private var model = VMModel()
     @State private var pane: Pane = .screen
@@ -1069,13 +1083,11 @@ struct RootView: View {
     @State private var pickIPA = false
     @State private var pickDEB = false
     @State private var askPath = false
-    @State private var guestPath = "/var/mobile/"
     /// Where the button sits, as a fraction of the view, so that it stays put
     /// across rotations and relaunches. Negative means it has never been moved.
     @AppStorage("menuX") private var menuX: Double = -1
     @AppStorage("menuY") private var menuY: Double = -1
     @State private var dragging: CGSize = .zero
-    @Environment(\.scenePhase) private var scenePhase
 
     private static let buttonSize: CGFloat = 48
 
@@ -1108,7 +1120,7 @@ struct RootView: View {
                 if !model.missing.isEmpty {
                     SetupView(model: model)
                         .navigationTitle("Inferno")
-                        .navigationBarTitleDisplayMode(.inline)
+                        .inlineNavigationTitle()
                 } else {
                     // No navigation bar: the guest's picture is nearly as tall
                     // as the phone's own screen, and a title bar was taking the
@@ -1143,6 +1155,45 @@ struct RootView: View {
                     .toolbar(.hidden, for: .navigationBar)
                 }
             }
+            .modifier(GuestActions(model: model, pane: pane, pickFile: $pickFile, pickIPA: $pickIPA,
+                                   pickDEB: $pickDEB, askPath: $askPath))
+        }
+        // An ordinary app until full screen is asked for: the phone's own status
+        // bar at the top, and the home swipe doing what it always does. Full
+        // screen gives the guest the whole display, status bar included.
+        .statusBarHidden(fullScreen)
+        // And the edges: in full screen the first swipe goes to the guest and
+        // the second to the phone. The home indicator stays for that — hidden,
+        // iOS ignores the deferral, and full screen used to leave the home
+        // swipe a single one for exactly that reason.
+        .onAppear { applyEdges() }
+        .onChange(of: model.isRunning) { _ in applyEdges() }
+        .onChange(of: fullScreen) { _ in applyEdges() }
+    }
+
+    /// Only while the guest is running and has the whole screen.
+    private func applyEdges() {
+        SystemGestures.apply(deferEdges: model.isRunning && fullScreen)
+    }
+}
+#endif
+
+/// What every window around the guest presents over it, on iOS and on a Mac
+/// alike: the three file pickers, the question of which guest file to fetch,
+/// the transfer banner, and a fresh look at JIT and the files whenever the app
+/// comes back to the front.
+struct GuestActions: ViewModifier {
+    @ObservedObject var model: VMModel
+    let pane: Pane
+    @Binding var pickFile: Bool
+    @Binding var pickIPA: Bool
+    @Binding var pickDEB: Bool
+    @Binding var askPath: Bool
+    @State private var guestPath = "/var/mobile/"
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content
             // Kept here rather than on the menu: the menu already presents the
             // settings sheet, and two sheet-like presentations on one view fight.
             .fileImporter(isPresented: $pickFile, allowedContentTypes: [.item]) { result in
@@ -1161,7 +1212,7 @@ struct RootView: View {
             .alert(L("Забрать файл из гостя"), isPresented: $askPath) {
                 TextField(L("Путь в госте"), text: $guestPath)
                     .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                    .noAutocapitalization()
                 Button(L("Забрать")) { model.receiveFromGuest(guestPath) }
                 Button(L("Отмена"), role: .cancel) {}
             } message: {
@@ -1184,23 +1235,6 @@ struct RootView: View {
                     model.refreshFiles()
                 }
             }
-        }
-        // An ordinary app until full screen is asked for: the phone's own status
-        // bar at the top, and the home swipe doing what it always does. Full
-        // screen gives the guest the whole display, status bar included.
-        .statusBarHidden(fullScreen)
-        // And the edges: in full screen the first swipe goes to the guest and
-        // the second to the phone. The home indicator stays for that — hidden,
-        // iOS ignores the deferral, and full screen used to leave the home
-        // swipe a single one for exactly that reason.
-        .onAppear { applyEdges() }
-        .onChange(of: model.isRunning) { _ in applyEdges() }
-        .onChange(of: fullScreen) { _ in applyEdges() }
-    }
-
-    /// Only while the guest is running and has the whole screen.
-    private func applyEdges() {
-        SystemGestures.apply(deferEdges: model.isRunning && fullScreen)
     }
 }
 
@@ -1216,6 +1250,9 @@ struct ControlMenu: View {
     @Binding var askPath: Bool
     @State private var showSettings = false
     @State private var confirmQuit = false
+    /// How big the button is: a thumb's worth on the phone, the size of the
+    /// traffic lights beside it in a Mac window's bar.
+    var discSize: CGFloat = 48
 
     /// The terminal's own choice of what to show. Held by the same key the
     /// terminal holds it under, so the two stay in step.
@@ -1237,7 +1274,13 @@ struct ControlMenu: View {
             }
 
             Section(L("Машина")) {
-                Button(L("Параметры…"), systemImage: "gearshape") { showSettings = true }
+                Button(L("Параметры…"), systemImage: "gearshape") {
+                    #if os(macOS)
+                    MacSettings.open()
+                    #else
+                    showSettings = true
+                    #endif
+                }
                 Button(startTitle, systemImage: "play.fill") {
                     model.start()
                 }
@@ -1302,6 +1345,13 @@ struct ControlMenu: View {
             // terminal's black.
             glassDisc
         }
+        #if os(macOS)
+        // A Mac draws a menu as a pop-up button with an arrow unless told not
+        // to; here it is the disc and nothing else, as on the phone.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        #endif
         .sheet(isPresented: $showSettings) { SettingsView(model: model) }
         .sheet(isPresented: $showPackages) { PackagesView(model: model) }
         .sheet(isPresented: $showCatalog) { CatalogView(model: model) }
@@ -1317,10 +1367,14 @@ struct ControlMenu: View {
     /// that reads much the same on anything older.
     @ViewBuilder
     private var glassDisc: some View {
+        #if os(macOS)
+        // In the Mac window's bar, a plain glyph like the others there.
+        BarGlyph(systemName: "slider.horizontal.3")
+        #else
         let face = Image(systemName: "slider.horizontal.3")
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: discSize * 0.375, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 48, height: 48)
+            .frame(width: discSize, height: discSize)
         // glassEffect itself is only declared in the iOS 26 SDK — #available
         // guards it at runtime, but a toolchain built against an older SDK
         // (Xcode below 26, as CI's still is) can't even see the symbol to
@@ -1328,7 +1382,7 @@ struct ControlMenu: View {
         // builds on both: real glass with Xcode 26, the material fallback
         // everywhere else.
         #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, *) {
             // Clipped as well as shaped. While the menu opens, the glass is
             // handed to the presentation animation, and for a frame or two it
             // draws as the square it really is before the shape catches up.
@@ -1353,6 +1407,7 @@ struct ControlMenu: View {
             .clipShape(Circle())
             .contentShape(Circle())
             .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+        #endif
         #endif
     }
 
@@ -1382,9 +1437,14 @@ struct ScreenView: View {
     /// system furnishings is larger — the island above, the home indicator
     /// below. Sideways it needs less, so it takes less.
     private func margins() -> (h: CGFloat, v: CGFloat) {
+        #if os(macOS)
+        // The window is the phone's shape already: the picture fills it.
+        return (0, 0)
+        #else
         guard !fullScreen else { return (0, 0) }
         let insets = DeviceInsets.current
         return (16, max(insets.top, insets.bottom, 16))
+        #endif
     }
 
     /// The rectangle the guest's picture occupies, centred on the whole screen.
@@ -1738,7 +1798,7 @@ struct TerminalView: View {
             TextField(L("Команда гостю"), text: $command)
                 .font(.system(size: 14, design: .monospaced))
                 .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
                 .submitLabel(.send)
                 .onSubmit(sendCommand)
             if source == .shell {
@@ -1779,8 +1839,16 @@ struct SetupView: View {
     var body: some View {
         List {
             Section {
+                #if os(macOS)
+                Text(L("Скопируйте InfernoData и AppleSEPROM-Cebu-B1 в папку Inferno в «Документах»."))
+                    .font(.callout)
+                Button(L("Показать папку в Finder"), systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([VMConfig.documents])
+                }
+                #else
                 Text(L("Откройте «Файлы» → «На iPhone» → «Inferno» и скопируйте туда InfernoData и AppleSEPROM-Cebu-B1."))
                     .font(.callout)
+                #endif
                 Text(L("Папки уже созданы, файлы можно класть прямо в них. Подробности — в файле «КУДА КЛАСТЬ ФАЙЛЫ.txt» там же."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)

@@ -35,7 +35,7 @@ enum GuestAgentSetup {
     /// The bundled agent, packed, or nil when the build had no `ldid` to sign it.
     private static var bundled: Data? {
         if let packedOverride { return packedOverride }
-        let url = Bundle.main.bundleURL.appendingPathComponent("guest-tools/agent.gz")
+        let url = (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("guest-tools/agent.gz")
         return try? Data(contentsOf: url)
     }
 

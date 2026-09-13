@@ -505,11 +505,20 @@ final class KernelFilter {
 #if canImport(UIKit)
 import UIKit
 
+typealias PlatformFont = UIFont
+typealias PlatformColor = UIColor
+#else
+import AppKit
+
+typealias PlatformFont = NSFont
+typealias PlatformColor = NSColor
+#endif
+
 extension TerminalEmulator {
-    /// Draws the grid for UIKit. Runs of one colour are joined so the result
+    /// Draws the grid for the text view. Runs of one colour are joined so the result
     /// carries as few attribute runs as it can — that count, not the character
     /// count, is what the text view's layout pass costs.
-    func render(font: UIFont, maxLines: Int = 240) -> NSAttributedString {
+    func render(font: PlatformFont, maxLines: Int = 240) -> NSAttributedString {
         let out = NSMutableAttributedString()
         let rows = visible(maxLines: maxLines)
 
@@ -526,7 +535,7 @@ extension TerminalEmulator {
                 guard !text.isEmpty else { return }
                 var attrs: [NSAttributedString.Key: Any] = [
                     .font: font,
-                    .foregroundColor: TerminalEmulator.uiColor(runFg, bold: runBold) ?? UIColor.label,
+                    .foregroundColor: TerminalEmulator.uiColor(runFg, bold: runBold) ?? TerminalEmulator.defaultText,
                 ]
                 if let bg = TerminalEmulator.uiColor(runBg, bold: false) {
                     attrs[.backgroundColor] = bg
@@ -551,9 +560,18 @@ extension TerminalEmulator {
         return out
     }
 
-    static func uiColor(_ index: Int16, bold: Bool) -> UIColor? {
+    static func uiColor(_ index: Int16, bold: Bool) -> PlatformColor? {
         guard let (r, g, b) = rgb(index, bold: bold) else { return nil }
-        return UIColor(red: r, green: g, blue: b, alpha: 1)
+        return PlatformColor(red: r, green: g, blue: b, alpha: 1)
+    }
+
+    /// Text in no particular colour: whatever the system uses for labels.
+    static var defaultText: PlatformColor {
+        #if canImport(UIKit)
+        .label
+        #else
+        .labelColor
+        #endif
     }
 }
 
@@ -573,7 +591,7 @@ final class GuestScreen: ObservableObject {
     private let filter = KernelFilter()
     private var hideKernel = true
     private var consumed = -1
-    private var font = UIFont.monospacedSystemFont(ofSize: 8, weight: .regular)
+    private var font = PlatformFont.monospacedSystemFont(ofSize: 8, weight: .regular)
 
     /// The view knows how wide it is; the terminal does not. Eighty columns have
     /// to fit, so the size comes from there.
@@ -628,6 +646,7 @@ final class GuestScreen: ObservableObject {
     }
 }
 
+#if canImport(UIKit)
 /// The console is drawn by UIKit rather than by `Text`.
 ///
 /// SwiftUI builds a `Text` layout from scratch whenever its string changes, and
@@ -681,6 +700,54 @@ struct TerminalTextView: UIViewRepresentable {
             guard bottom > 0 else { return }
             view.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
         }
+    }
+}
+#else
+/// The console on a Mac: the same reasoning as on iOS — a text view keeps its
+/// layout where `Text` rebuilds it — in AppKit's shape, a text view inside a
+/// scroll view.
+struct TerminalTextView: NSViewRepresentable {
+    let text: NSAttributedString
+    let revision: Int
+    let follow: Bool
+    /// Changed by the caller to demand a jump to the bottom — on appearing, and
+    /// whenever the pane is switched back to.
+    let pin: Int
+
+    final class Coordinator {
+        var revision = -1
+        var pin = -1
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasHorizontalScroller = false
+        if let view = scroll.documentView as? NSTextView {
+            view.isEditable = false
+            view.isSelectable = true
+            view.drawsBackground = false
+            view.textContainerInset = NSSize(width: 8, height: 8)
+            view.textContainer?.lineFragmentPadding = 0
+            view.textContainer?.lineBreakMode = .byClipping
+        }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? NSTextView else { return }
+        let changed = context.coordinator.revision != revision
+        if changed {
+            context.coordinator.revision = revision
+            view.textStorage?.setAttributedString(text)
+        }
+        let demanded = context.coordinator.pin != pin
+        if demanded { context.coordinator.pin = pin }
+
+        guard (changed && follow) || demanded else { return }
+        DispatchQueue.main.async { view.scrollToEndOfDocument(nil) }
     }
 }
 #endif

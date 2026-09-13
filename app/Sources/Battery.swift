@@ -1,4 +1,9 @@
+import Foundation
+#if canImport(UIKit)
 import UIKit
+#else
+import IOKit.ps
+#endif
 
 /// Shows the guest the phone's own battery.
 ///
@@ -20,6 +25,9 @@ import UIKit
 /// - The status bar's own data is empty in an app's process, visible status bar
 ///   or not: `+[UIStatusBarServer getStatusBarData]` holds zeros and an empty
 ///   clock, and `-[UIStatusBarManager createLocalStatusBar]` returns nil.
+///
+/// A Mac has no such limit: IOKit gives the capacity as it is, and a Mac without
+/// a battery at all gives nothing, which leaves the guest its own figure.
 final class HostBattery {
     private typealias SetFn = @convention(c) (Int32, Bool, Bool) -> Void
 
@@ -49,6 +57,7 @@ final class HostBattery {
         }
         setFn = unsafeBitCast(symbol, to: SetFn.self)
 
+        #if os(iOS)
         // Without this the level reads -1 and the state .unknown.
         UIDevice.current.isBatteryMonitoringEnabled = true
         let center = NotificationCenter.default
@@ -57,6 +66,7 @@ final class HostBattery {
                 self?.report(force: false)
             })
         }
+        #endif
         // UIKit sends its level notifications at most once a minute; the timer
         // is for whatever they leave out.
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.report(force: false) }
@@ -86,6 +96,9 @@ final class HostBattery {
                            external: charging, charging: charging)
         }
 
+        #if os(macOS)
+        return Self.macBattery()
+        #else
         let device = UIDevice.current
         guard device.batteryLevel >= 0 else { return nil }
         let percent = Int32((device.batteryLevel * 100).rounded())
@@ -99,5 +112,32 @@ final class HostBattery {
         case .unknown:   return nil
         @unknown default: return nil
         }
+        #endif
     }
+
+    #if os(macOS)
+    /// The internal battery as IOKit describes it: current and maximum capacity,
+    /// whether the Mac is on its adapter, and whether it is charging. A charged
+    /// battery on the adapter counts as charging, for the same reason as on the
+    /// phone: the guest lights its bolt from that alone.
+    private static func macBattery() -> Reading? {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
+        else { return nil }
+        for source in list {
+            guard let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue()
+                    as? [String: Any],
+                  description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
+                  let current = description[kIOPSCurrentCapacityKey] as? Int,
+                  let maximum = description[kIOPSMaxCapacityKey] as? Int, maximum > 0
+            else { continue }
+            let external = description[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
+            let charging = description[kIOPSIsChargingKey] as? Bool ?? false
+            let charged = description[kIOPSIsChargedKey] as? Bool ?? false
+            let percent = Int32((Double(current) * 100 / Double(maximum)).rounded())
+            return Reading(percent: percent, external: external, charging: charging || (external && charged))
+        }
+        return nil
+    }
+    #endif
 }

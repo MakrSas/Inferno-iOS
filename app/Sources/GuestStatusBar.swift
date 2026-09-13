@@ -1,4 +1,6 @@
+#if canImport(CoreTelephony)
 import CoreTelephony
+#endif
 import Foundation
 import Network
 
@@ -177,7 +179,7 @@ enum GuestStatusBar {
     /// the guest's kernel kills a binary written over a path it has already
     /// seen signed.
     private static func ensureHelper(_ shell: GuestShell) throws -> String {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("guest-tools/sbnet.gz")
+        let bundled = (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("guest-tools/sbnet.gz")
         guard let packed = try? Data(contentsOf: bundled) else { throw Failure.missingHelper }
 
         var sum = PosixChecksum()
@@ -233,13 +235,21 @@ final class PhoneNetwork {
     var onChange: (() -> Void)?
 
     private var monitor: NWPathMonitor?
+    #if os(iOS)
     private let telephony = CTTelephonyNetworkInfo()
+    #endif
 
     func start() {
         guard monitor == nil else { return }
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
+            #if os(iOS)
             let wifi = path.status == .satisfied && path.usesInterfaceType(.wifi)
+            #else
+            // A Mac is never on a cellular network, and the guest has no glyph
+            // for a cable: any connection at all is drawn as Wi-Fi.
+            let wifi = path.status == .satisfied
+            #endif
             DispatchQueue.main.async { self?.update(wifi: wifi) }
         }
         monitor.start(queue: DispatchQueue(label: "inferno.phone-network"))
@@ -248,13 +258,18 @@ final class PhoneNetwork {
     }
 
     private func update(wifi: Bool) {
+        #if os(iOS)
         let radio = Self.generation(telephony.serviceCurrentRadioAccessTechnology?.values.first)
+        #else
+        let radio = self.radio
+        #endif
         guard wifi != onWiFi || radio != self.radio else { return }
         onWiFi = wifi
         self.radio = radio
         onChange?()
     }
 
+    #if os(iOS)
     /// The nearest label the guest can draw for a radio technology.
     private static func generation(_ technology: String?) -> GuestStatusBar.Network {
         switch technology {
@@ -270,4 +285,5 @@ final class PhoneNetwork {
         default:                               return .lte
         }
     }
+    #endif
 }

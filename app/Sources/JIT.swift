@@ -171,6 +171,15 @@ enum JIT {
 
     private static var selfTraced = false
 
+    /// Only on iOS. A Mac gives MAP_JIT to any process without the hardened
+    /// runtime, and PT_TRACE_ME there hands the process to its parent as a
+    /// tracee, which turns its signals into stops.
+    #if os(iOS)
+    private static let maySelfTrace = true
+    #else
+    private static let maySelfTrace = false
+    #endif
+
     /// Re-runs the probe. Cheap, and safe to call repeatedly.
     ///
     /// It has to be repeatable: StikDebug attaches *after* the app is already
@@ -194,7 +203,7 @@ enum JIT {
             // changed, which is all the mirror mapping needs.
             needsSplitWX = true
             status = .available(via: L("зеркальное отображение (split-wx)"))
-        } else if !selfTraced, selfTrace() {
+        } else if !selfTraced, Self.maySelfTrace, selfTrace() {
             selfTraced = true
             if canAllocateExecutable() {
                 needsSplitWX = false

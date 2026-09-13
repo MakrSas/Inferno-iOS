@@ -52,7 +52,7 @@ struct CatalogView: View {
             .searchable(text: $query, prompt: L("Поиск приложения"))
             .refreshable { await store.refresh() }
             .navigationTitle(L("Каталог приложений"))
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(L("Закрыть")) { dismiss() }
@@ -121,7 +121,7 @@ struct CatalogView: View {
     @ViewBuilder
     private func icon(_ app: CatalogApp, size: CGFloat) -> some View {
         if let image = icons.images[app.iconURL?.absoluteString ?? ""] {
-            Image(uiImage: image)
+            Image(platformImage: image)
                 .resizable().scaledToFill()
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
@@ -153,7 +153,7 @@ private struct CatalogDetail: View {
                 Section {
                     HStack(spacing: 14) {
                         if let image = icons.images[app.iconURL?.absoluteString ?? ""] {
-                            Image(uiImage: image).resizable().scaledToFill()
+                            Image(platformImage: image).resizable().scaledToFill()
                                 .frame(width: 64, height: 64)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
@@ -189,7 +189,7 @@ private struct CatalogDetail: View {
                     Text(L("Приложение скачается на телефон и уедет в гостя тем же путём, что и «Установить .ipa»."))
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button(L("Готово")) { dismiss() } }
             }
@@ -210,8 +210,8 @@ private struct CatalogSourcesView: View {
                     HStack {
                         TextField(L("https://адрес/источника.json"), text: $adding)
                             .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.URL)
+                            .noAutocapitalization()
+                            .urlKeyboard()
                         Button(L("Добавить")) {
                             let url = adding.trimmingCharacters(in: .whitespaces)
                             guard !url.isEmpty, !store.sources.contains(where: { $0.url == url }) else { return }
@@ -232,7 +232,7 @@ private struct CatalogSourcesView: View {
                 }
             }
             .navigationTitle(L("Источники"))
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button(L("Готово")) { dismiss() } }
             }
@@ -243,7 +243,7 @@ private struct CatalogSourcesView: View {
 /// Icons, fetched once and kept while the screen is open.
 @MainActor
 final class IconStore: ObservableObject {
-    @Published private(set) var images: [String: UIImage] = [:]
+    @Published private(set) var images: [String: PlatformImage] = [:]
     private var inFlight: Set<String> = []
 
     func load(_ url: URL?) {
@@ -255,7 +255,7 @@ final class IconStore: ObservableObject {
             var request = URLRequest(url: url)
             request.cachePolicy = .returnCacheDataElseLoad
             request.timeoutInterval = 20
-            let image = (try? await URLSession.shared.data(for: request)).flatMap { UIImage(data: $0.0) }
+            let image = (try? await URLSession.shared.data(for: request)).flatMap { PlatformImage(data: $0.0) }
             await MainActor.run {
                 guard let self else { return }
                 self.inFlight.remove(key)

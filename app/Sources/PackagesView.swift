@@ -68,7 +68,7 @@ struct PackagesView: View {
             .searchable(text: $query, prompt: L("Поиск пакета"))
             .refreshable { await store.refresh() }
             .navigationTitle(L("Менеджер пакетов"))
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(L("Закрыть")) { dismiss() }
@@ -172,8 +172,8 @@ private struct SourcesView: View {
                     HStack {
                         TextField(L("https://адрес.репозитория/"), text: $adding)
                             .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.URL)
+                            .noAutocapitalization()
+                            .urlKeyboard()
                         Button(L("Добавить")) {
                             let url = adding.trimmingCharacters(in: .whitespaces)
                             guard !url.isEmpty, !store.repos.contains(where: { $0.url == url }) else { return }
@@ -194,7 +194,7 @@ private struct SourcesView: View {
                 }
             }
             .navigationTitle(L("Источники"))
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("Готово")) { dismiss() }

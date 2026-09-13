@@ -233,7 +233,7 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsRoot {
                 Section {
                     NavigationLink { ScreenSettings() } label: {
                         Label(L("Экран"), systemImage: "iphone.gen3")
@@ -299,13 +299,133 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle(L("Параметры"))
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
+            #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("Готово")) { dismiss() }
                 }
             }
+            #endif
         }
+        #if os(macOS)
+        // Every form below takes the grouped look of the Mac's own settings:
+        // rounded sections, labels on the left, controls on the right. The
+        // style is inherited by the screens the stack pushes.
+        .formStyle(.grouped)
+        .frame(minWidth: 420, idealWidth: 480, minHeight: 520, idealHeight: 680)
+        #endif
+    }
+}
+
+#if os(macOS)
+/// The settings on a Mac, laid out the way System Settings is: the sections in
+/// a sidebar, the chosen one beside it. The pages are the phone's own screens —
+/// only the way between them differs, since drilling in and back out of a list
+/// is how a phone saves room, and a Mac window has room.
+struct MacSettingsView: View {
+    @ObservedObject var model: VMModel
+    @ObservedObject var settings = Settings.shared
+    @State private var page: Page? = .screen
+
+    enum Page: Hashable {
+        case screen, terminal, network, battery, statusBar
+        case general, machine, translator, diagnostics, credits
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $page) {
+                Section {
+                    row(.screen, L("Экран"), "iphone.gen3")
+                    row(.terminal, L("Терминал"), "terminal")
+                    row(.network, L("Сеть"), "network")
+                    row(.battery, L("Батарея гостя"), "battery.75percent")
+                    row(.statusBar, L("Строка состояния гостя"), "antenna.radiowaves.left.and.right")
+                }
+                Section {
+                    row(.general, L("Основные"), "gearshape")
+                    row(.machine, L("Машина"), "cpu")
+                    row(.translator, L("Транслятор"), "arrow.triangle.2.circlepath")
+                    row(.diagnostics, L("Диагностика"), "stethoscope")
+                }
+                Section {
+                    row(.credits, L("Благодарности"), "heart")
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
+        } detail: {
+            detail
+                .formStyle(.grouped)
+        }
+        .frame(minWidth: 680, idealWidth: 760, minHeight: 480, idealHeight: 600)
+    }
+
+    private func row(_ page: Page, _ title: String, _ symbol: String) -> some View {
+        Label(title, systemImage: symbol).tag(page)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch page ?? .screen {
+        case .screen:      ScreenSettings()
+        case .terminal:    TerminalSettings()
+        case .network:     NetworkSettings()
+        case .battery:     BatterySettings()
+        case .statusBar:   StatusBarSettings(model: model)
+        case .general:     general
+        case .machine:     MachineSettings()
+        case .translator:  TranslatorSettings()
+        case .diagnostics: DiagnosticsSettings(model: model)
+        case .credits:     CreditsView()
+        }
+    }
+
+    /// What sits loose on the phone's first screen: the time zone, the
+    /// language and the build.
+    private var general: some View {
+        Form {
+            Section {
+                Toggle(L("Часовой пояс как на телефоне"), isOn: $settings.guestTimeZone)
+            } footer: {
+                Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
+            }
+            .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
+
+            Section {
+                Picker(L("Язык"), selection: $settings.language) {
+                    ForEach(AppLanguage.allCases, id: \.rawValue) { lang in
+                        Text(lang.title).tag(lang.rawValue)
+                    }
+                }
+            } footer: {
+                Text(L("Изменения применяются при следующем запуске машины. Перезапустите приложение, чтобы запустить её заново."))
+            }
+
+            Section {
+                LabeledContent(L("Сборка"), value: BuildInfo.stamp)
+                Button(L("Показать папку в Finder"), systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([VMConfig.documents])
+                }
+            }
+        }
+        .navigationTitle(L("Основные"))
+    }
+}
+#endif
+
+/// The settings' first screen: the grouped list iOS draws for a List, and on a
+/// Mac the grouped form that System Settings is made of — a List there is a
+/// flat sidebar-like column, which is not what a settings window looks like.
+private struct SettingsRoot<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        #if os(macOS)
+        Form { content() }
+        #else
+        List { content() }
+        #endif
     }
 }
 
@@ -369,7 +489,7 @@ private struct ScreenSettings: View {
             }
         }
         .navigationTitle(L("Экран"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -391,7 +511,7 @@ private struct TerminalSettings: View {
             }
         }
         .navigationTitle(L("Терминал"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -415,7 +535,7 @@ private struct NetworkSettings: View {
             }
         }
         .navigationTitle(L("Сеть"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -467,7 +587,7 @@ private struct MachineSettings: View {
             }
         }
         .navigationTitle(L("Машина"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -505,7 +625,7 @@ private struct BatterySettings: View {
         .onChange(of: settings.guestBatteryPercent) { _ in HostBattery.shared.start() }
         .onChange(of: settings.guestBatteryCharging) { _ in HostBattery.shared.start() }
         .navigationTitle(L("Батарея гостя"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -531,7 +651,7 @@ private struct StatusBarSettings: View {
                 Section {
                     TextField(L("Имя оператора"), text: $settings.statusBarCarrier)
                         .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                        .noAutocapitalization()
                 } header: {
                     Text(L("Оператор"))
                 } footer: {
@@ -579,7 +699,7 @@ private struct StatusBarSettings: View {
         .onChange(of: settings.statusBarVPN) { _ in model.paintStatusBar() }
         .onChange(of: settings.statusBarAirplane) { _ in model.paintStatusBar() }
         .navigationTitle(L("Строка состояния гостя"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -596,7 +716,11 @@ private struct TranslatorSettings: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } footer: {
+                    #if os(macOS)
+                    Text(L("Ядра гостя исполняются прямо на ядрах Mac через Hypervisor.framework, без перевода кода. Выключите, чтобы сравнить с транслятором. Применяется при запуске машины."))
+                    #else
                     Text(L("Ядра гостя исполняются прямо на ядрах iPad, без перевода кода, и JIT не нужен. Только iPad на M1 или M2 с iPadOS до 16.3.1 включительно, установка через TrollStore или джейлбрейк. Где виртуализации нет, машина работает на трансляторе, как обычно. Применяется при запуске машины."))
+                    #endif
                 }
             }
 
@@ -609,7 +733,7 @@ private struct TranslatorSettings: View {
             }
         }
         .navigationTitle(L("Транслятор"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -653,7 +777,7 @@ private struct DiagnosticsSettings: View {
             }
         }
         .navigationTitle(L("Диагностика"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 
     private var jitLine: String {

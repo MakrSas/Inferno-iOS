@@ -85,7 +85,7 @@ final class TransferNamespace {
     private static func ensureHelper(_ shell: GuestShell,
                                      deliver: (URL, String) throws -> Void,
                                      note: (String) -> Void) throws -> String {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("guest-tools/nsio")
+        let bundled = (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("guest-tools/nsio")
         guard let data = try? Data(contentsOf: bundled) else {
             throw GuestFiles.Failure.io(L("помощника нет в приложении"))
         }

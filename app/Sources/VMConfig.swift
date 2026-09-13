@@ -38,8 +38,16 @@ struct VMConfig {
     var displayHeight: Int = 1792
     var displayScale: Int = 2
 
+    /// The app's Documents on iOS, where the Files app shows it. A Mac app that
+    /// is not sandboxed would be handed the user's whole Documents folder, so it
+    /// keeps to a folder of its own inside it.
     static var documents: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        #if os(macOS)
+        return base.appendingPathComponent("Inferno")
+        #else
+        return base
+        #endif
     }
 
     static var dataDirectory: URL { documents.appendingPathComponent("InfernoData") }
@@ -167,7 +175,7 @@ struct VMConfig {
         // QEMU looks for its data files (VNC keymaps among them) next to the
         // binary; inside an app bundle it has to be told where they are, or it
         // reports "could not read keymap file" and exits.
-        let dataDir = Bundle.main.bundlePath + "/qemu-data"
+        let dataDir = (Bundle.main.resourcePath ?? Bundle.main.bundlePath) + "/qemu-data"
 
         // HVF where the kernel allows it: the guest's cores run on the iPad's,
         // and the emulator patches the kernel for it by itself.

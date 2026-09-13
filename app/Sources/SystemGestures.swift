@@ -1,3 +1,4 @@
+#if os(iOS)
 import UIKit
 import ObjectiveC
 
@@ -50,3 +51,9 @@ enum SystemGestures {
         return (windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController
     }
 }
+#else
+/// A Mac window has no system gestures at its edges to defer.
+enum SystemGestures {
+    static func apply(deferEdges: Bool) {}
+}
+#endif

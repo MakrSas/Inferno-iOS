@@ -71,7 +71,7 @@ struct Credit: Identifiable, Hashable {
 /// same picture again every time a row scrolls back into view.
 @MainActor
 final class AvatarStore: ObservableObject {
-    @Published private(set) var images: [String: UIImage] = [:]
+    @Published private(set) var images: [String: PlatformImage] = [:]
     private var inFlight: Set<String> = []
 
     func load(_ credit: Credit) {
@@ -83,7 +83,7 @@ final class AvatarStore: ObservableObject {
             request.cachePolicy = .returnCacheDataElseLoad
             request.timeoutInterval = 20
             let image = (try? await URLSession.shared.data(for: request))
-                .flatMap { UIImage(data: $0.0) }
+                .flatMap { PlatformImage(data: $0.0) }
             await MainActor.run {
                 guard let self else { return }
                 self.inFlight.remove(key)
@@ -109,7 +109,7 @@ struct CreditsView: View {
             }
         }
         .navigationTitle(L("Благодарности"))
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
         .sheet(item: $chosen) { CreditCard(credit: $0, avatars: avatars) }
     }
 
@@ -135,7 +135,7 @@ struct CreditsView: View {
     @ViewBuilder
     private func avatar(_ credit: Credit, size: CGFloat) -> some View {
         if let image = avatars.images[credit.id] {
-            Image(uiImage: image)
+            Image(platformImage: image)
                 .resizable()
                 .scaledToFill()
                 .frame(width: size, height: size)
@@ -245,8 +245,8 @@ private struct CreditCard: View {
 
     /// The whole sheet filled with the picture, blurred past recognition. It is
     /// the colour of the card rather than anything to look at.
-    private func wash(_ image: UIImage, size: CGSize) -> some View {
-        Image(uiImage: image)
+    private func wash(_ image: PlatformImage, size: CGSize) -> some View {
+        Image(platformImage: image)
             .resizable()
             .scaledToFill()
             .frame(width: size.width, height: size.height)
@@ -259,9 +259,9 @@ private struct CreditCard: View {
     /// One square copy of the picture at the top of the sheet, blurred by
     /// `blur` and faded out between the two heights, given as fractions of the
     /// square.
-    private func sheet(_ image: UIImage, side: CGFloat, blur: CGFloat,
+    private func sheet(_ image: PlatformImage, side: CGFloat, blur: CGFloat,
                        from: CGFloat, to: CGFloat) -> some View {
-        Image(uiImage: image)
+        Image(platformImage: image)
             .resizable()
             .scaledToFill()
             .frame(width: side, height: side)
@@ -391,7 +391,7 @@ private extension View {
     @ViewBuilder
     func glassy<S: Shape>(_ shape: S) -> some View {
         #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, *) {
             glassEffect(.regular, in: shape).clipShape(shape)
         } else {
             frosted(shape)

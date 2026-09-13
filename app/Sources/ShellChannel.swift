@@ -1,7 +1,9 @@
 import Combine
 import Darwin
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// The guest's shell, separated from the kernel's chatter.
 ///

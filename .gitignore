@@ -119,3 +119,5 @@ pixel
 *~
 .vscode/
 .idea/
+.build-mac/
+Inferno-macOS.zip
