@@ -46,6 +46,8 @@ enum L10n {
         ("файла нет", "no such file"),
         ("Потоки: %d, из них выполняются %d", "Threads: %d, %d of them running"),
         ("за %d с сожжено %@ с процессорного времени", "in %d s, %@ s of CPU time burned"),
+        ("Устройство: %@, %@ %@ (%@), память %.1f ГБ", "Device: %@, %@ %@ (%@), %.1f GB of memory"),
+        ("(повторилось ещё: %d)", "(repeated %d more times)"),
         ("соединение закрыто", "the connection was closed"),
         ("сервер отклонил рукопожатие", "the server refused the handshake"),
         ("сервер требует пароль VNC", "the server wants a VNC password"),

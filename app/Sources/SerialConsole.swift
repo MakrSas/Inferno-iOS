@@ -269,10 +269,11 @@ final class SerialConsole: ObservableObject {
     /// second down the console: measured on the rig, four gigabytes before it
     /// settles, and on the phone that lands in the app's Documents.
     ///
-    /// Cutting the file to nothing leaves the emulator writing where it left
-    /// off, so the length stays and the front becomes a hole. The space comes
-    /// back, and this reader — which finishes every poll at the end of the
-    /// file — never reads into the hole.
+    /// Cutting the file to nothing is enough: the emulator appends, so what it
+    /// writes next lands at the top of a short file, and `poll` sees that the
+    /// file is now shorter than where it stopped reading. The emulator used to
+    /// write on from its old offset and leave a hole of zeros in front, and a
+    /// log sent in was hundreds of megabytes of nothing.
     private func trimIfHuge() {
         guard Date().timeIntervalSince(lastTrim) >= 5 else { return }
         lastTrim = Date()
@@ -293,6 +294,13 @@ final class SerialConsole: ObservableObject {
         }
 
         guard let handle else { return }
+        // Cut back by `trimIfHuge`, or emptied for a new start: reading goes on
+        // from the top, instead of waiting past the end of a file that will not
+        // grow that far again.
+        var info = stat()
+        if fstat(handle.fileDescriptor, &info) == 0, let offset = try? handle.offset(), UInt64(info.st_size) < offset {
+            try? handle.seek(toOffset: 0)
+        }
         guard let bytes = try? handle.readToEnd(), !bytes.isEmpty else {
             // A shell prompt carries no newline after it, so whoever reads this
             // cannot tell a half-written line from a finished one until the

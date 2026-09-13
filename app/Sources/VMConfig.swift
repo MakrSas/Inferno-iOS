@@ -203,8 +203,11 @@ struct VMConfig {
             "-m", memory,
             // The console is logged to a file rather than only streamed: a
             // socket drops everything printed before a client attaches, and the
-            // guest starts talking long before the UI can connect.
-            "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off,logfile=\(VMConfig.guestConsoleLog.path),logappend=off",
+            // guest starts talking long before the UI can connect. Appended to,
+            // so that when the app cuts an overgrown log back to nothing the
+            // emulator carries on at the top instead of beyond a hole of zeros;
+            // the app empties the file before each start instead.
+            "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off,logfile=\(VMConfig.guestConsoleLog.path),logappend=on",
             "-serial", "chardev:serial0",
             // Lets the app ask the machine what state it is in.
             "-qmp", "tcp:127.0.0.1:\(qmpPort),server,nowait",

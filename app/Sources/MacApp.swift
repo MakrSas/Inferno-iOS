@@ -31,6 +31,7 @@ struct InfernoMacApp: App {
         // Start capturing before anything can fail, so the reason is on screen.
         LogCapture.shared.start()
         LogCapture.shared.note(L("Сборка приложения: %@", BuildInfo.stamp))
+        LogCapture.shared.noteDevice()
         JIT.prepare()
     }
 

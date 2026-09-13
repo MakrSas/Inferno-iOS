@@ -15,6 +15,7 @@ struct InfernoApp: App {
         // Start capturing before anything can fail, so the reason is on screen.
         LogCapture.shared.start()
         LogCapture.shared.note(L("Сборка приложения: %@", BuildInfo.stamp))
+        LogCapture.shared.noteDevice()
         // Must happen before the emulator asks for its translation buffer.
         JIT.prepare()
     }
@@ -250,6 +251,9 @@ final class VMModel: ObservableObject {
             }
         }
         hasRun = true
+        // The emulator appends to its console log rather than starting it
+        // afresh (see VMConfig), so the run before is cleared away here.
+        _ = truncate(VMConfig.guestConsoleLog.path, 0)
         QemuBridge.shared.environment = Settings.shared.emulatorEnvironment
         QemuBridge.shared.start(arguments: config.arguments())
     }
