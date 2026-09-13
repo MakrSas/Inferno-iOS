@@ -120,7 +120,11 @@ final class SerialConsole: ObservableObject {
     private func watchForDeath(_ piece: String) {
         let text = deathTail + piece
         deathTail = String(text.suffix(120))
-        guard let line = text.split(separator: "\n", omittingEmptySubsequences: false).first(where: { line in
+        // By isNewline, not by "\n": the console ends its lines with "\r\n",
+        // which Swift holds as one character that is not "\n". Split by "\n",
+        // a whole read was one line, and the reason given for a panic was
+        // whatever the read began with — never the panic itself.
+        guard let line = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).first(where: { line in
             SerialConsole.deathMarks.contains { line.contains($0) }
         }) else { return }
 

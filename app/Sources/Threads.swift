@@ -62,9 +62,11 @@ enum Threads {
                 verdict = String(format: L("загружено ~%.1f ядра — гость исполняется"), cores)
             }
 
+            let threads = L("Потоки: %d, из них выполняются %d", second.total, second.running)
+            let spent = L("за %d с сожжено %@ с процессорного времени", Int(interval), String(format: "%.2f", burned))
             completion("""
-            Потоки: \(second.total), из них выполняются \(second.running)
-              за \(Int(interval)) с сожжено \(String(format: "%.2f", burned)) с процессорного времени
+            \(threads)
+              \(spent)
               \(verdict)
               guest-console.log: \(console)
             """)

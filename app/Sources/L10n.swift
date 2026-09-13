@@ -44,6 +44,8 @@ enum L10n {
     private static let pairs: [(String, String)] = [
         // Missing until the audit found them
         ("файла нет", "no such file"),
+        ("Потоки: %d, из них выполняются %d", "Threads: %d, %d of them running"),
+        ("за %d с сожжено %@ с процессорного времени", "in %d s, %@ s of CPU time burned"),
         ("соединение закрыто", "the connection was closed"),
         ("сервер отклонил рукопожатие", "the server refused the handshake"),
         ("сервер требует пароль VNC", "the server wants a VNC password"),
