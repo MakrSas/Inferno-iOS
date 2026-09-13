@@ -90,6 +90,9 @@ final class RepoStore: ObservableObject {
     /// before anyone types an address.
     static let defaults = [
         "https://apt.bingner.com/",
+        // Plain HTTP on purpose: its certificate has expired, so HTTPS fails
+        // outright. iOS refuses HTTP unless told otherwise, and Info.plist
+        // makes an exception for this one host.
         "http://apt.thebigboss.org/repofiles/cydia/",
         "https://repo.chariz.com/",
         "https://havoc.app/",
@@ -158,6 +161,11 @@ final class RepoStore: ObservableObject {
     /// The packages' own `Filename` is relative to the repository's address,
     /// never to wherever the index turned out to live.
     private static func fetch(_ repo: URL) async throws -> [RepoPackage] {
+        // Why a request never got an answer at all. When not one of the paths
+        // was answered, this is the real reason — a refused connection, a
+        // certificate, iOS blocking plain HTTP — and "no index" would hide it.
+        var unanswered: Error?
+        var answered = false
         for name in indexPaths {
             guard let url = URL(string: name, relativeTo: repo) else { continue }
             var request = URLRequest(url: url)
@@ -166,9 +174,12 @@ final class RepoStore: ObservableObject {
             request.setValue("14.0", forHTTPHeaderField: "X-Firmware")
             request.timeoutInterval = 30
 
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  (response as? HTTPURLResponse)?.statusCode == 200
-            else { continue }
+            let data: Data
+            let response: URLResponse
+            do { (data, response) = try await URLSession.shared.data(for: request) }
+            catch { unanswered = error; continue }
+            answered = true
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
 
             let text: Data
             if name.hasSuffix(".bz2") {
@@ -184,6 +195,7 @@ final class RepoStore: ObservableObject {
             }
             return parse(String(decoding: text, as: UTF8.self), repo: repo)
         }
+        if !answered, let unanswered { throw unanswered }
         throw Failure.noIndex
     }
 
