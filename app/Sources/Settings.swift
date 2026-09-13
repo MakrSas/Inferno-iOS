@@ -36,6 +36,11 @@ final class Settings: ObservableObject {
     @AppStorage("tbSize") var tbSize: Int = 128 {
         willSet { objectWillChange.send() }
     }
+    /// Use HVF when the kernel allows it. On by default: where it is not
+    /// available it changes nothing, and the switch exists to compare the two.
+    @AppStorage("virtualization") var virtualization: Bool = true {
+        willSet { objectWillChange.send() }
+    }
     /// Whether the guest's cores ask the phone for the fast cores.
     @AppStorage("vcpuPriority") var vcpuPriority: Bool = true {
         willSet { objectWillChange.send() }
@@ -151,6 +156,7 @@ final class Settings: ObservableObject {
         c.cores = cores
         c.memory = memory
         c.tbSize = tbSize
+        c.virtualization = virtualization && HVF.probe == .available
         c.network = network
         c.headless = headless
         c.builtInDisplay = builtInDisplay
@@ -582,6 +588,18 @@ private struct TranslatorSettings: View {
 
     var body: some View {
         Form {
+            if HVF.isInBuild {
+                Section {
+                    Toggle(L("Аппаратная виртуализация (HVF)"), isOn: $settings.virtualization)
+                        .disabled(HVF.probe != .available)
+                    Text(HVF.description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } footer: {
+                    Text(L("Ядра гостя исполняются прямо на ядрах iPad, без перевода кода, и JIT не нужен. Только iPad на M1 или M2 с iPadOS до 16.3.1 включительно, установка через TrollStore или джейлбрейк. Где виртуализации нет, машина работает на трансляторе, как обычно. Применяется при запуске машины."))
+                }
+            }
+
             Section {
                 Picker(L("Буфер трансляций"), selection: $settings.tbSize) {
                     ForEach([32, 64, 128, 256, 384, 512], id: \.self) { Text(L("%d МБ", $0)).tag($0) }
@@ -608,6 +626,7 @@ private struct DiagnosticsSettings: View {
             Section(L("Состояние")) {
                 Text(statusLine)
                 Text(jitLine)
+                if HVF.isInBuild { Text(HVF.description) }
                 Text(L("Параметры: %d vCPU, %@",
                        Settings.shared.cores, Settings.shared.memory))
             }

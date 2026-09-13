@@ -16,17 +16,45 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
 else
     IPA="$PROJECT/Inferno.ipa"
 fi
+# INFERNO_HVF=1 builds the HVF variant for M1/M2 iPads on iPadOS up to 16.3.1:
+# the emulator library built with -Dhvf=enabled, the reimplemented
+# Hypervisor.framework beside it, and the private hypervisor entitlement. It is
+# meant for TrollStore, so it comes out as a .tipa, and under a name of its own
+# so it never overwrites the ordinary Inferno.ipa.
+HVF="${INFERNO_HVF:-}"
+LIBDIR=inferno
+ENTITLEMENTS="$ROOT/Resources/entitlements.plist"
+if [ -n "$HVF" ]; then
+    IPA="$(dirname "$IPA")/Inferno-HVF.tipa"
+    LIBDIR=inferno-hvf
+    ENTITLEMENTS="$ROOT/Resources/entitlements-hvf.plist"
+fi
 # Ищем библиотеку эмулятора там, где она обычно и лежит: сначала рядом с
 # репозиторием, как описано в README, потом в дереве сборки. Переопределяется
 # переменной INFERNO_DYLIB.
 DYLIB="${INFERNO_DYLIB:-}"
 if [ -z "$DYLIB" ]; then
     for candidate in \
-        "$ROOT/../build/inferno/libqemu-aarch64-softmmu.dylib" \
-        "$HOME/inferno-ios/build/inferno/libqemu-aarch64-softmmu.dylib"
+        "$ROOT/../build/$LIBDIR/libqemu-aarch64-softmmu.dylib" \
+        "$HOME/inferno-ios/build/$LIBDIR/libqemu-aarch64-softmmu.dylib"
     do
         [ -f "$candidate" ] && DYLIB="$candidate" && break
     done
+fi
+# The HVF variant's framework, from an xcodebuild archive of utmapp/Hypervisor.
+# Overridden by INFERNO_HYPERVISOR.
+HYPERVISOR="${INFERNO_HYPERVISOR:-}"
+if [ -n "$HVF" ] && [ -z "$HYPERVISOR" ]; then
+    for candidate in \
+        "$ROOT/../build/hypervisor/Frameworks/Hypervisor.framework" \
+        "$HOME/inferno-ios/build/hypervisor/Frameworks/Hypervisor.framework"
+    do
+        [ -d "$candidate" ] && HYPERVISOR="$candidate" && break
+    done
+    [ -n "$HYPERVISOR" ] || {
+        echo "No Hypervisor.framework for the HVF build. Build utmapp/Hypervisor or set INFERNO_HYPERVISOR=" >&2
+        exit 1
+    }
 fi
 APP="$BUILD/Payload/Inferno.app"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -60,6 +88,8 @@ xcrun --sdk iphoneos swiftc \
 echo "==> Сборка бандла"
 cp "$ROOT/Resources/Info.plist" "$APP/Info.plist"
 cp "$DYLIB" "$APP/Frameworks/"
+# The library finds the framework through @loader_path, so beside it.
+if [ -n "$HVF" ]; then cp -R "$HYPERVISOR" "$APP/Frameworks/"; fi
 chmod +x "$APP/Inferno"
 
 # QEMU's data directory. Inferno drops the keymaps from its tree, but the VNC
@@ -144,8 +174,11 @@ fi
 echo "==> Подпись"
 # The dylib is signed first: the app's seal covers it.
 codesign --force --sign - --timestamp=none "$APP/Frameworks/$(basename "$DYLIB")"
+if [ -n "$HVF" ]; then
+    codesign --force --sign - --timestamp=none "$APP/Frameworks/Hypervisor.framework"
+fi
 codesign --force --sign - --timestamp=none \
-    --entitlements "$ROOT/Resources/entitlements.plist" \
+    --entitlements "$ENTITLEMENTS" \
     "$APP"
 
 echo "==> Упаковка"

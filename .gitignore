@@ -69,6 +69,7 @@ build-macos/
 .build/
 prefix/
 *.ipa
+*.tipa
 *.dylib
 *.o
 *.a

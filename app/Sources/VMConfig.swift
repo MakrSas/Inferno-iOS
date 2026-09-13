@@ -11,6 +11,9 @@ struct VMConfig {
     var serialPort: UInt16 = 4555
     var qmpPort: UInt16 = 4556
     var tbSize: Int = 128
+    /// The iPad's own cores instead of the translator. Set only when the
+    /// kernel has already said yes — see `HVF`.
+    var virtualization: Bool = false
     /// Reverse tethering over the guest's own USB port: the emulator plays the
     /// USB host, brings up the device's CDC-NCM interface and NATs through
     /// slirp. No privileges, no companion VM.
@@ -166,19 +169,24 @@ struct VMConfig {
         // reports "could not read keymap file" and exits.
         let dataDir = Bundle.main.bundlePath + "/qemu-data"
 
+        // HVF where the kernel allows it: the guest's cores run on the iPad's,
+        // and the emulator patches the kernel for it by itself.
+        //
+        // Otherwise multi-threaded TCG, since iOS gives no hypervisor access to
+        // applications. Never single: the SEP and the AP cores have to move
+        // together, and on one thread the SEP panics initialising its key
+        // store, so the guest never boots. That used to be a setting, and it
+        // only ever caught people out. split-wx maps the translation buffer
+        // twice — writable and executable — which is what a debugger-enabled
+        // process is allowed to do when MAP_JIT is refused.
+        let accel = virtualization
+            ? "hvf"
+            : "tcg,thread=multi,tb-size=\(tbSize)" + (JIT.needsSplitWX ? ",split-wx=on" : "")
+
         var argv = [
             "qemu-system-aarch64",
             "-L", dataDir,
-            // Multi-threaded TCG: the only acceleration available here, since
-            // iOS gives no hypervisor access to applications. Never single: the
-            // SEP and the AP cores have to move together, and on one thread the
-            // SEP panics initialising its key store, so the guest never boots.
-            // That used to be a setting, and it only ever caught people out.
-            // split-wx maps the translation buffer twice — writable and
-            // executable — which is what a debugger-enabled process is allowed
-            // to do when MAP_JIT is refused.
-            "-accel", "tcg,thread=multi,tb-size=\(tbSize)"
-                + (JIT.needsSplitWX ? ",split-wx=on" : ""),
+            "-accel", accel,
             "-M", machine,
             "-kernel", "\(data)/Restore/kernelcache.release.iphone12b",
             "-dtb", "\(data)/Restore/Firmware/all_flash/DeviceTree.n104ap.im4p",

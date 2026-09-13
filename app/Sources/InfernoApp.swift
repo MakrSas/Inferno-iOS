@@ -152,10 +152,18 @@ final class VMModel: ObservableObject {
             LogCapture.shared.note(L("Запуск отменён: не хватает файлов — %@", missing.joined(separator: ", ")))
             return
         }
+        // Which accelerator, said before anything else: under HVF there is no
+        // translator, and a report that does not say which one ran is half a
+        // report.
+        let virtualized = config.virtualization
+        if HVF.isInBuild {
+            LogCapture.shared.note(HVF.description)
+            LogCapture.shared.note(virtualized ? L("Ускорение: HVF") : L("Ускорение: TCG"))
+        }
         // Starting without executable memory does not fail — it wedges the
         // vCPU on the first generated instruction, which is far harder to read
-        // than a refusal.
-        guard jit.isAvailable else {
+        // than a refusal. HVF generates no code, so it needs none.
+        guard virtualized || jit.isAvailable else {
             LogCapture.shared.note(L("Запуск отменён: JIT недоступен."))
             return
         }
@@ -1486,7 +1494,7 @@ struct ScreenView: View {
     private var placeholder: String {
         switch model.qemuState {
         case .idle:
-            if case .unavailable(let why) = model.jit {
+            if case .unavailable(let why) = model.jit, !model.config.virtualization {
                 return L("JIT недоступен — %@.\nБез него транслятор не сможет выделить буфер, и машина не запустится.", why)
             }
             return L("Откройте меню и запустите машину")
