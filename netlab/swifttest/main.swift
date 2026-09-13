@@ -22,7 +22,12 @@ func crc(_ url: URL) -> String {
 let serial = SerialConsole()
 serial.attachInput(port: 4555)
 Thread.sleep(forTimeInterval: 2)
-let files = GuestFiles(serial: serial, linkUp: { true }, bringNetworkUp: { })
+// The agent is looked for once: `carry` asks for it on every transfer, and
+// `discover` is a ping with a timeout. Without this the harness would drive the
+// old path and never test what it is here for.
+let foundAgent = GuestAgent.discover()
+if foundAgent != nil { print("== agent found, transfers go through it") }
+let files = GuestFiles(serial: serial, linkUp: { true }, bringNetworkUp: { }, agent: { foundAgent })
 
 let mode = CommandLine.arguments[1]
 do {
@@ -54,6 +59,23 @@ do {
         print("== чиню менеджер пакетов")
         let complaints = try GuestPackages.repair(serial: serial, note: { print("   \($0)") })
         print(complaints.isEmpty ? "== готово, замечаний нет" : "== готово: " + complaints.joined(separator: "; "))
+    } else if mode == "agentup" {
+        // The whole app path for the agent: find it or carry it in over the
+        // console, run `agent install`, then reach it over the namespace.
+        // AGENTGZ points at the gzipped, signed agent the app would carry.
+        let gz = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENTGZ"] ?? "")
+        GuestAgentSetup.packedOverride = try? Data(contentsOf: gz)
+        print("== bringUp (full app path)")
+        switch GuestAgentSetup.bringUp(serial: serial, note: { print("   \($0)") }) {
+        case .installed(let agent):
+            print("INSTALLED — agent answered over the namespace")
+            let job = agent.run("id -u; uname -r", timeout: 30)
+            print("   exec id/uname:", (job?.output ?? "nil").replacingOccurrences(of: "\n", with: " "))
+            print("   statusbar:", agent.setStatusBar(["cellularBars": 4, "network": 4,
+                                                       "carrier": "rig", "wifi": true, "wifiBars": 3]))
+        case .unavailable(let why, _):
+            print("UNAVAILABLE:", why); exit(1)
+        }
     } else if mode == "send" {
         // Тот самый путь, которым идёт «Отправить файл в гостя…» на телефоне:
         // через openDestination, то есть через поиск папки «Файлов» в госте.
@@ -88,7 +110,10 @@ do {
         var t0 = Date()
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            try files.carry(local, to: GuestFiles.quote(remote), shell: shell,
+            // `plain` is what the app passes everywhere: the agent has no
+            // shell to expand a quoted path for it. Without it the harness
+            // would test a path the app no longer takes.
+            try files.carry(local, to: GuestFiles.quote(remote), plain: remote, shell: shell,
                             progress: { _, _ in }, note: { print("   отправка — \($0)") })
         }
         let up = Date().timeIntervalSince(t0)

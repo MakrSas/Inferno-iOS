@@ -9,6 +9,10 @@ import ObjectiveC
 /// makes the system ask for a second swipe, which leaves the first one for the
 /// guest.
 ///
+/// It does nothing while the home indicator is hidden: iOS ignores the deferral
+/// then, and the swipe goes straight home. So whoever turns it on keeps the
+/// indicator visible.
+///
 /// SwiftUI has no modifier for it: the value is read from the window's root
 /// view controller, and `WindowGroup` owns that controller. So the getter is
 /// installed on its class at runtime. It reads a flag rather than returning a

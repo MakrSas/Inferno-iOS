@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>platform-application</key><true/>
+  <key>com.apple.private.security.no-container</key><true/>
+  <!-- Opening /dev/rdiskN: denied to the shell even as root without this. -->
+  <key>com.apple.private.security.disk-device-access</key><true/>
+  <key>com.apple.private.security.storage.AppleInternal</key><true/>
+  <!-- Posting the status bar override; SpringBoard drops it otherwise and logs
+       "Only entitled processes may set status bar override data". -->
+  <key>com.apple.UIKit.status-bar-override-allow</key><true/>
+  <key>com.apple.security.exception.mach-lookup.global-name</key>
+  <array>
+    <string>com.apple.UIKit.statusbarserver</string>
+    <string>com.apple.springboard.statusbarservices</string>
+  </array>
+</dict>
+</plist>

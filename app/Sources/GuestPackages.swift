@@ -239,7 +239,7 @@ enum GuestPackages {
             shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
 
             note(L("Переношу пакет в гостя…"))
-            try files.carry(local, to: remote, shell: shell, progress: progress, note: note)
+            try files.carry(local, to: remote, plain: remote, shell: shell, progress: progress, note: note)
 
             // The name is read before the file goes away: it is what the apps
             // below are looked up by.

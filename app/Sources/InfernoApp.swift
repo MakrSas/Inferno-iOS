@@ -17,7 +17,6 @@ struct InfernoApp: App {
         WindowGroup {
             RootView()
                 .preferredColorScheme(.dark)
-                .statusBarHidden(true)
         }
     }
 }
@@ -93,6 +92,13 @@ final class VMModel: ObservableObject {
     private(set) lazy var shell = ShellChannel(
         serial: serial,
         linkUp: { [weak self] in self?.linkIsUp ?? false })
+
+    /// The agent inside the guest, once it is found or installed — the app's way
+    /// past the single console. Nil while it is being brought up, and for good
+    /// on a build or an emulator that cannot have one, in which case everything
+    /// falls back to the console as before. Read and written on the main thread.
+    private(set) var guestAgent: GuestAgent?
+    private var agentBringUpStarted = false
     private lazy var qmp = QMPClient(port: config.qmpPort)
     var config: VMConfig { Settings.shared.config }
 
@@ -182,7 +188,30 @@ final class VMModel: ObservableObject {
                     }
                     self.serial.follow()
                     self.serial.attachInput(port: self.config.serialPort)
+                    // The shell is opened without waiting for anyone to look at
+                    // its pane. It waits for the bootstrap's bash by itself, and
+                    // having it from the start is what keeps the rest working:
+                    // the console channel needs no link, while the guest puts
+                    // its own end of the USB network down once it has booted,
+                    // and a shell asked for later would be waiting on that.
+                    self.shell.connect()
                 }
+                // The library is loaded by now, so the battery can be handed
+                // over before the guest's driver first asks for it.
+                HostBattery.shared.start()
+                // The status bar: once SpringBoard is up, and again whenever the
+                // phone's own connection changes while the guest follows it.
+                PhoneNetwork.shared.onChange = { [weak self] in
+                    guard Settings.shared.statusBarMode == GuestStatusBar.Mode.phone.rawValue else { return }
+                    self?.paintStatusBar()
+                }
+                PhoneNetwork.shared.start()
+                // Bring up the agent in the background: install it if this is a
+                // fresh guest, find it if it is already there. It takes over the
+                // status bar and the service commands from the console. Started
+                // after a delay so a fresh boot has reached a shell first.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.bringUpAgent() }
+                self.paintStatusBarWhenReady(delay: 30)
                 if self.config.network { self.watchNetwork() }
                 if Settings.shared.autoRepairPackages { self.preparePackages() }
                 self.serial.onGuestDeath = { [weak self] in self?.guestDied() }
@@ -234,6 +263,24 @@ final class VMModel: ObservableObject {
     /// saying so from inside, which is what the stock guide has always told
     /// people to do by hand.
     func fixNetwork() {
+        // Through the agent when there is one: it reaches the guest off the
+        // console, so this works even while the console is busy — which is when
+        // the network most often needs a nudge.
+        if let agent = guestAgent {
+            DispatchQueue.global(qos: .utility).async {
+                let job = agent.run("/usr/sbin/ipconfig set en0 DHCP", timeout: 90)
+                DispatchQueue.main.async {
+                    if job != nil {
+                        LogCapture.shared.note(L("Сеть (агент): попросил гостя поднять en0."))
+                    } else if !agent.isAlive() {
+                        self.guestAgent = nil
+                        LogCapture.shared.note(L("Агент пропал — сеть подниму через консоль."))
+                        self.fixNetwork()
+                    }
+                }
+            }
+            return
+        }
         // Never in the middle of somebody else's conversation with the console:
         // a command landing between two lines of a file transfer breaks it, and
         // the poke can always wait for the next round.
@@ -294,6 +341,53 @@ final class VMModel: ObservableObject {
         }
     }
 
+    /// Takes an app from the catalogue: downloaded here, where the network is
+    /// real, then handed to the guest by the same installer the `.ipa` button
+    /// uses — so it gets the same channel, the same checking and the same
+    /// banner.
+    func installCatalogApp(name: String, url: URL, size: Int64) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        transfer = .running(title: L("↓ %@", name), done: 0, total: size)
+        LogCapture.shared.note(L("Каталог: качаю %@", name))
+
+        Task {
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 120
+                let (stream, response) = try await URLSession.shared.bytes(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw GuestFiles.Failure.io(L("источник ответил %d",
+                                                  (response as? HTTPURLResponse)?.statusCode ?? 0))
+                }
+
+                let total = max(response.expectedContentLength, size)
+                var body = Data()
+                body.reserveCapacity(Int(max(total, 0)))
+                var shown = Date.distantPast
+                for try await byte in stream {
+                    body.append(byte)
+                    if Date().timeIntervalSince(shown) > 0.1 {
+                        shown = Date()
+                        self.transfer = .running(title: L("↓ %@", name), done: Int64(body.count), total: total)
+                    }
+                }
+
+                let file = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(GuestFiles.safeName(name) + ".ipa")
+                try? FileManager.default.removeItem(at: file)
+                try body.write(to: file)
+
+                self.transfer = nil
+                self.installIPA(file)
+            }
+            catch {
+                self.transfer = .failed(error.localizedDescription)
+                LogCapture.shared.note(L("Каталог: %@ — %@", name, error.localizedDescription))
+            }
+        }
+    }
+
     /// What the guest has installed, for the package manager to mark.
     func installedPackages() async -> [String: String] {
         let serial = self.serial
@@ -335,6 +429,180 @@ final class VMModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             do { try GuestPackages.respring(serial: serial) }
             catch { LogCapture.shared.note(L("SpringBoard: %@", error.localizedDescription)) }
+        }
+        // A new SpringBoard knows nothing of the status bar override.
+        paintedStatusBar = nil
+        paintStatusBarWhenReady(delay: 20)
+    }
+
+    // MARK: The agent
+
+    /// How many times a transient agent bring-up has been retried, so a guest
+    /// that is simply slow to reach a shell is waited out, but a permanent
+    /// refusal is not hammered.
+    private var agentAttempts = 0
+
+    /// Finds or installs the guest agent, off the main thread, and once it is up
+    /// hands it the status bar so the console is out of that loop. Safe to call
+    /// again — it does nothing while a bring-up is in flight or already done.
+    func bringUpAgent(force: Bool = false) {
+        guard isRunning else { return }
+        if force { agentBringUpStarted = false; guestAgent = nil; agentAttempts = 0 }
+        guard !agentBringUpStarted, guestAgent == nil else { return }
+        agentBringUpStarted = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let outcome = GuestAgentSetup.bringUp(serial: self.serial) { line in
+                LogCapture.shared.note(L("Агент: %@", line))
+            }
+            DispatchQueue.main.async {
+                switch outcome {
+                case .installed(let agent):
+                    self.guestAgent = agent
+                    self.agentAttempts = 0
+                    LogCapture.shared.note(L("Агент готов: команды и строка состояния идут мимо консоли."))
+                    // Hand it the status bar straight away, and let it keep it.
+                    self.paintStatusBar(force: true)
+                case .unavailable(let why, let retry):
+                    // Not an error: the console path stays. A guest that has not
+                    // reached a shell yet is worth trying again; a build or an
+                    // emulator that cannot have an agent is not.
+                    self.agentBringUpStarted = false
+                    if retry, self.agentAttempts < 8, self.isRunning {
+                        self.agentAttempts += 1
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { self.bringUpAgent() }
+                    } else {
+                        LogCapture.shared.note(L("Агент не поднят (%@) — работаю через консоль.", why))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: The guest's status bar
+
+    /// The helper arguments last drawn, so that nothing is redrawn for nothing.
+    private var paintedStatusBar: String?
+    private var paintQueued = false
+
+    /// Draws what the status bar settings ask for.
+    ///
+    /// Coalesced for a second: a text field or a stepper changes many times in
+    /// a row, and every change would otherwise be a console conversation.
+    func paintStatusBar(force: Bool = false) {
+        guard isRunning else { return }
+        if force { paintedStatusBar = nil }
+        guard !paintQueued else { return }
+        paintQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            self.paintQueued = false
+            let look = GuestStatusBar.requested()
+            let arguments = look?.arguments ?? "-z"
+            // Nothing drawn and nothing wanted: the helper need not even be
+            // carried in.
+            guard arguments != self.paintedStatusBar, look != nil || self.paintedStatusBar != nil else { return }
+
+            // The agent's way: hand it the look and it keeps it applied by
+            // itself, through resprings and a busy console alike. This is sent
+            // once, not on a timer.
+            if let agent = self.guestAgent {
+                DispatchQueue.global(qos: .utility).async {
+                    let ok = agent.setStatusBar(look?.json)
+                    DispatchQueue.main.async {
+                        if ok {
+                            self.paintedStatusBar = look == nil ? nil : arguments
+                            LogCapture.shared.note(L("Строка состояния гостя (агент): %@", arguments))
+                        } else if agent.isAlive() {
+                            LogCapture.shared.note(L("Строка состояния гостя: агент не принял."))
+                        } else {
+                            // The agent went away; drop back to the console.
+                            self.guestAgent = nil
+                            LogCapture.shared.note(L("Агент пропал — возвращаюсь на консоль для строки состояния."))
+                            self.paintStatusBar(force: true)
+                        }
+                    }
+                }
+                return
+            }
+
+            // Said out loud: a change that silently did nothing is what made
+            // this look broken on the phone.
+            guard self.serial.interactive else {
+                LogCapture.shared.note(L("Строка состояния гостя: консоль гостя не готова, попробую позже."))
+                return
+            }
+            let serial = self.serial
+            DispatchQueue.global(qos: .utility).async {
+                let outcome = Result { try serial.exclusive { try GuestStatusBar.apply(look, shell: GuestShell(serial: serial)) } }
+                DispatchQueue.main.async {
+                    switch outcome {
+                    case .success:
+                        self.paintedStatusBar = look == nil ? nil : arguments
+                        LogCapture.shared.note(L("Строка состояния гостя: %@", arguments))
+                    case .failure(let error):
+                        LogCapture.shared.note(L("Строка состояния гостя: не вышло — %@", error.localizedDescription))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Which round of repainting is current; an older one stops when it sees
+    /// a newer one has started.
+    private var statusBarRounds = 0
+
+    /// Keeps the status bar drawn while the guest comes up and afterwards.
+    ///
+    /// SpringBoard starts its status bar server some way into the boot, and an
+    /// override sent before that is lost. Asking the guest whether SpringBoard
+    /// is there was tried, and cost the console: `ps -A` hung on a busy guest
+    /// and took bash down with it, and the shell pane, the packages and this
+    /// all typed into a console nobody read after that. The override is safe
+    /// to send twice, so it is simply sent again — every half minute while the
+    /// guest boots, then every minute, which also brings it back soon after
+    /// SpringBoard restarts on its own. Each time only if the console is free:
+    /// nothing waits for this.
+    private func paintStatusBarWhenReady(delay: TimeInterval) {
+        statusBarRounds += 1
+        let round = statusBarRounds
+        let pauses: [TimeInterval] = [delay, 30, 30, 30, 30]
+
+        func tick(_ step: Int) {
+            guard isRunning, round == statusBarRounds else { return }
+            repaintStatusBarQuietly()
+            let next = step + 1 < pauses.count ? pauses[step + 1] : 60
+            DispatchQueue.main.asyncAfter(deadline: .now() + next) { tick(step + 1) }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { tick(0) }
+    }
+
+    /// One repaint that gives way to anybody else on the console and says
+    /// nothing unless it fails.
+    private func repaintStatusBarQuietly() {
+        // With the agent up there is nothing to do here: it reapplies the
+        // override on its own, including after a respring, without the console.
+        if guestAgent != nil { return }
+        guard serial.interactive, let look = GuestStatusBar.requested() else { return }
+        let serial = self.serial
+        DispatchQueue.global(qos: .utility).async {
+            var outcome: Result<Void, Error>?
+            serial.ifFree {
+                outcome = Result { try GuestStatusBar.apply(look, shell: GuestShell(serial: serial)) }
+            }
+            guard let outcome else { return }
+            DispatchQueue.main.async {
+                switch outcome {
+                case .success:
+                    if self.paintedStatusBar != look.arguments {
+                        LogCapture.shared.note(L("Строка состояния гостя: %@", look.arguments))
+                    }
+                    self.paintedStatusBar = look.arguments
+                case .failure(let error):
+                    LogCapture.shared.note(L("Строка состояния гостя: не вышло — %@", error.localizedDescription))
+                }
+            }
         }
     }
 
@@ -422,6 +690,16 @@ final class VMModel: ObservableObject {
     /// again, once the machine has had time to come back up.
     private func guestDied() {
         LogCapture.shared.note(L("Гость упал: %@", serial.guestDeathReason))
+        // The status bar override lived in the SpringBoard that just went away.
+        paintedStatusBar = nil
+        // The agent instance died with the guest. It starts itself again from
+        // the launchd cache on the way back up, so the client is dropped and
+        // found afresh once the machine has had time to boot; the console keeps
+        // the status bar meanwhile.
+        guestAgent = nil
+        agentBringUpStarted = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in self?.bringUpAgent() }
+        paintStatusBarWhenReady(delay: 150)
         guard Settings.shared.autoRepairPackages, isRunning else { return }
         LogCapture.shared.note(L("Гость упал в панику — поднимаю менеджер пакетов заново, когда вернётся."))
         preparePackages(delay: 150)
@@ -507,7 +785,8 @@ final class VMModel: ObservableObject {
     private lazy var files = GuestFiles(
         serial: serial,
         linkUp: { [weak self] in self?.linkIsUp ?? false },
-        bringNetworkUp: { [weak self] in DispatchQueue.main.async { self?.fixNetwork() } })
+        bringNetworkUp: { [weak self] in DispatchQueue.main.async { self?.fixNetwork() } },
+        agent: { [weak self] in self?.guestAgent })
 
     /// Checks what can be checked on the spot, so a transfer that cannot work
     /// says why at once instead of after a minute of waiting.
@@ -841,14 +1120,22 @@ struct RootView: View {
                 }
             }
         }
-        // The home indicator sits on top of the guest's own gesture area.
-        .persistentSystemOverlays(fullScreen ? .hidden : .automatic)
-        // Only while the guest is there to receive the swipes: the rest of the
-        // time the host's own gestures should behave normally.
-        .onAppear { SystemGestures.apply(deferEdges: model.isRunning) }
-        .onChange(of: model.isRunning) { running in
-            SystemGestures.apply(deferEdges: running)
-        }
+        // An ordinary app until full screen is asked for: the phone's own status
+        // bar at the top, and the home swipe doing what it always does. Full
+        // screen gives the guest the whole display, status bar included.
+        .statusBarHidden(fullScreen)
+        // And the edges: in full screen the first swipe goes to the guest and
+        // the second to the phone. The home indicator stays for that — hidden,
+        // iOS ignores the deferral, and full screen used to leave the home
+        // swipe a single one for exactly that reason.
+        .onAppear { applyEdges() }
+        .onChange(of: model.isRunning) { _ in applyEdges() }
+        .onChange(of: fullScreen) { _ in applyEdges() }
+    }
+
+    /// Only while the guest is running and has the whole screen.
+    private func applyEdges() {
+        SystemGestures.apply(deferEdges: model.isRunning && fullScreen)
     }
 }
 
@@ -860,6 +1147,7 @@ struct ControlMenu: View {
     @Binding var pickIPA: Bool
     @Binding var pickDEB: Bool
     @State private var showPackages = false
+    @State private var showCatalog = false
     @Binding var askPath: Bool
     @State private var showSettings = false
     @State private var confirmQuit = false
@@ -911,6 +1199,9 @@ struct ControlMenu: View {
                 Button(L("Менеджер пакетов"), systemImage: "square.grid.2x2") {
                     showPackages = true
                 }
+                Button(L("Каталог приложений"), systemImage: "square.and.arrow.down.on.square") {
+                    showCatalog = true
+                }
                 Button(L("Установить .deb в гостя…"), systemImage: "shippingbox.and.arrow.backward") {
                     pickDEB = true
                 }
@@ -948,6 +1239,7 @@ struct ControlMenu: View {
         }
         .sheet(isPresented: $showSettings) { SettingsView(model: model) }
         .sheet(isPresented: $showPackages) { PackagesView(model: model) }
+        .sheet(isPresented: $showCatalog) { CatalogView(model: model) }
         .confirmationDialog(L("Выключить машину?"), isPresented: $confirmQuit, titleVisibility: .visible) {
             Button(L("Выключить"), role: .destructive) { model.shutdown() }
             Button(L("Отмена"), role: .cancel) {}
@@ -975,7 +1267,12 @@ struct ControlMenu: View {
             // Clipped as well as shaped. While the menu opens, the glass is
             // handed to the presentation animation, and for a frame or two it
             // draws as the square it really is before the shape catches up.
-            face.glassEffect(.regular.interactive(), in: Circle())
+            //
+            // Plain glass, not `.interactive()`: interactive glass answers
+            // touches itself, and the control wearing it — a menu here, buttons
+            // on the credits card — loses the first tap to the glass. The press
+            // animation is not worth a control that has to be pressed twice.
+            face.glassEffect(.regular, in: Circle())
                 .clipShape(Circle())
                 .contentShape(Circle())
         } else {

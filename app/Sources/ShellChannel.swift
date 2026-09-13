@@ -293,6 +293,15 @@ final class ShellChannel: ObservableObject {
                 continue
             }
             guard inside else { continue }
+            // The app's own machinery shares this console — the package repair,
+            // the agent install — and the tty echoes whatever it writes the
+            // moment it is written, even while this pane's command is still
+            // running. Those echoes land between our marks and are not what the
+            // user asked for. Everything that machinery sends carries the same
+            // marker assembly, and its answers carry the marker itself, so both
+            // are recognisable and neither belongs here.
+            if text.contains("v=VAL; t=") { continue }
+            if text.range(of: "VAL[0-9a-f]{4}", options: .regularExpression) != nil { continue }
             // The kernel can still write into the window; that much is filtered
             // the old way, by the shape of what it writes.
             screen.append(filter.process(text + "\r\n"))

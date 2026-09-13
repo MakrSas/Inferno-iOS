@@ -1,20 +1,16 @@
 name: Build Inferno.ipa
 
 # Builds an unsigned Inferno.ipa on a GitHub runner, so nobody needs their own
-# Mac. The build is attached to the run as an artifact and nothing else: the
-# file published with a release is the one built and tested on a real phone,
-# and this workflow used to overwrite it. Tags are still built, so that a
-# release is never cut from a tree that does not compile.
+# Mac. The .ipa is attached to the run as an artifact.
+#
+# Only by hand, from the Actions tab: a run costs the better part of half an
+# hour of macOS runner time, and the release builds are made on a Mac and
+# uploaded from there, not here.
 #
 # No guest image, firmware or Apple key is involved here — those are still
 # yours to build by ChefKiss's guide (see README).
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       emulator_ref:
@@ -101,4 +97,3 @@ jobs:
           name: Inferno-ipa
           path: app/Inferno.ipa
           if-no-files-found: error
-

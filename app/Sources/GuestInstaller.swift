@@ -80,7 +80,7 @@ final class GuestInstaller {
             try shell.requireAnswer("echo 1")
             _ = shell.run("mkdir -p \(TransferNamespace.toolsDirectory)")
 
-            try files.carry(scratch, to: Self.stagedTar, shell: shell,
+            try files.carry(scratch, to: Self.stagedTar, plain: Self.stagedTar, shell: shell,
                             progress: progress, note: note)
             try unpack(shell, target: target, note: note)
             checkAge(shell, wanted: wanted, note: note)

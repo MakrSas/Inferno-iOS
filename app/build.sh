@@ -125,8 +125,20 @@ echo "==> Помощник для гостя (nsio)"
 if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1; then
     mkdir -p "$APP/guest-tools"
     "$ROOT/../netlab/build-nsio.sh" "$APP/guest-tools/nsio" >/dev/null
+    # The other guest tool: draws a network into the guest's status bar. It
+    # needs ldid for the same reason — its entitlement is the whole point. It
+    # travels packed, because the app carries it in over the console.
+    "$ROOT/../netlab/build-sbnet.sh" "$BUILD/sbnet" >/dev/null
+    gzip -9 -n -c "$BUILD/sbnet" > "$APP/guest-tools/sbnet.gz"
+    # The agent: lives in the guest, started by launchd, and takes the app's
+    # requests over the scratch namespace instead of the console. Same ldid
+    # signing, same packed delivery over the console the first time. Without it
+    # the app just uses the console, as it always did.
+    echo "==> Guest agent (agent)"
+    "$ROOT/../netlab/build-agent.sh" "$BUILD/agent" >/dev/null
+    gzip -9 -n -c "$BUILD/agent" > "$APP/guest-tools/agent.gz"
 else
-    echo "    нет ldid — собираю без помощника (быстрый канал будет недоступен)"
+    echo "    no ldid — building without the guest tools (no fast channel, no agent, no status bar)"
 fi
 
 echo "==> Подпись"

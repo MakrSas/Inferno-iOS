@@ -60,11 +60,23 @@ final class GuestFiles {
     private let serial: SerialConsole
     private let linkUp: () -> Bool
     private let bringNetworkUp: () -> Void
+    /// The guest agent, when there is one.
+    ///
+    /// It owns the scratch namespace — it polls the device continuously — so the
+    /// `nsio` helper cannot read and write that same device at the same time
+    /// without corrupting the agent's control regions. That does not mean giving
+    /// up the fast channel: the agent carries files itself, through a data
+    /// region kept clear of those headers, and that is the path taken here when
+    /// the destination is a plain path. The network is only what is left when
+    /// neither channel can be had.
+    private let agent: () -> GuestAgent?
 
-    init(serial: SerialConsole, linkUp: @escaping () -> Bool, bringNetworkUp: @escaping () -> Void) {
+    init(serial: SerialConsole, linkUp: @escaping () -> Bool, bringNetworkUp: @escaping () -> Void,
+         agent: @escaping () -> GuestAgent? = { nil }) {
         self.serial = serial
         self.linkUp = linkUp
         self.bringNetworkUp = bringNetworkUp
+        self.agent = agent
     }
 
     // MARK: - To the guest
@@ -81,7 +93,11 @@ final class GuestFiles {
     /// Moves a local file to an exact path in the guest by the fastest channel
     /// there is, falling back to the network. Shared by the file menu and the
     /// `.ipa` installer, so both get the same speed and the same checking.
-    func carry(_ file: URL, to remote: String, shell: GuestShell,
+    /// `remote` is a shell expression — a quoted path, or one built around a
+    /// variable the guest holds. `plain` is the same destination as an ordinary
+    /// filesystem path, when the caller knows it: the agent talks to the guest
+    /// off the console and has no shell to expand anything for it.
+    func carry(_ file: URL, to remote: String, plain: String? = nil, shell: GuestShell,
                progress: @escaping (Int64, Int64) -> Void,
                note: @escaping (String) -> Void) throws {
         // The folder has to exist before anything is poured into it. When it did
@@ -90,6 +106,13 @@ final class GuestFiles {
         // the socket that says nothing about the cause. One short command costs
         // nothing and removes the whole class of confusion.
         _ = shell.run("mkdir -p \"$(dirname \(remote))\"")
+
+        // The agent's own channel: the same namespace, minus the console.
+        if let agent = agent(), let plain {
+            note(L("Канал: агент, NVMe."))
+            try agent.send(file, to: plain, progress: progress)
+            return
+        }
 
         if let fast = fastChannel(shell, note: note) {
             note(L("Канал: NVMe, %@.", fast.device))
@@ -104,7 +127,11 @@ final class GuestFiles {
     /// The fast channel, or nil when the emulator does not offer one. Looked up
     /// once per transfer: finding it costs a couple of short commands.
     private func fastChannel(_ shell: GuestShell, note: @escaping (String) -> Void) -> TransferNamespace? {
-        TransferNamespace.discover(shell: shell, deliver: { local, path in
+        // The agent, when it is up, is the one reading and writing this device.
+        // Its helper cannot share it — whatever the agent could not carry goes
+        // over the network instead.
+        if agent() != nil { return nil }
+        return TransferNamespace.discover(shell: shell, deliver: { local, path in
             // The helper itself can only come in the slow way — it is what makes
             // the fast way possible.
             try self.requireNetwork()
@@ -121,7 +148,10 @@ final class GuestFiles {
         // folder it points at has spaces in its name, and a path with spaces is
         // one more thing to get wrong on a console that drops bytes.
         let remote = "\"$F/Inferno/\"" + Self.quote(name)
-        try carry(file, to: remote, shell: shell, progress: progress, note: { _ in })
+        // The agent needs the destination spelled out, so `$F` is asked for once
+        // and expanded here. It holds spaces, which is fine off the console.
+        let plain = shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name }
+        try carry(file, to: remote, plain: plain, shell: shell, progress: progress, note: { _ in })
         // Root wrote it; the phone's own user has to be able to open it.
         _ = shell.line("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null", timeout: 60)
         return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
@@ -258,6 +288,21 @@ final class GuestFiles {
         let out: FileHandle
         do { out = try FileHandle(forWritingTo: partial) }
         catch { throw Failure.io(error.localizedDescription) }
+
+        // The agent reads the file and lays it in the data region itself.
+        if let agent = agent() {
+            do {
+                try agent.receive(remote, to: partial, progress: progress)
+                try? out.close()
+                do { try fm.moveItem(at: partial, to: destination) }
+                catch { throw Failure.io(error.localizedDescription) }
+                return destination
+            } catch {
+                try? out.close()
+                try? fm.removeItem(at: partial)
+                throw error
+            }
+        }
 
         // The namespace carries it whole, and checks it, without the console or
         // the network being involved in the bytes at all.

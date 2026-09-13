@@ -28,24 +28,60 @@ in English or Russian. Anything goes — see [Issues and ideas](#issues-and-idea
 ## What works
 
 - **The guest's screen**, drawn from the emulator's own framebuffer memory — no VNC, no encoding,
-  no socket. Touches land where your finger is.
+  no socket. Touches land where your finger is. The panel can be an iPhone 11, an iPhone 8 or an
+  SE: a smaller one is less work for the emulated cores, and it stays sharp, because the scale stays
+  at two and iOS uses the same artwork.
 - **Device buttons** — side button, volume, home.
 - **Internet in the guest, with no companion VM.** The app is its own USB host: it switches the
   emulated device into CDC-NCM mode and lets traffic out through slirp. `apt` works.
-- **File transfer both ways**, over that same link — about 500 KB/s. Files sent to the guest land
-  where the guest's own Files app can see them.
-- **A shell into the guest**, on a channel of its own so the kernel log does not shred it.
+- **File transfer both ways**, over a spare NVMe namespace the guest reads as raw bytes — megabytes
+  a second on the test rig, with a checksum on both ends. The network is the fallback. Files sent to
+  the guest land where the guest's own Files app can see them.
+- **Apps installed with one tap.** *Install an .ipa in the guest* unpacks it on the phone, carries
+  it in over that channel and registers it with SpringBoard — and says so when the app asks for a
+  newer iOS than the guest's 14.
+- **An app catalogue** of things an iOS 14 guest can actually run: DolphiniOS, Taurine, iSH and
+  Provenance to start with, and any AltStore source you add.
+- **A package manager on the phone.** Cydia repositories — bingner's, BigBoss, Chariz, Havoc and
+  Filza's own to start with — are read, searched and downloaded on the phone, where the network is
+  real and nothing times out; only the finished `.deb` goes into the guest. It knows what is
+  installed, and can reinstall or remove it.
+- **Cydia that works.** A restored image breaks it three ways at once — the root is read-only, dpkg
+  looks for its database where there is none, and nothing in the guest can be setuid, so Cydia's
+  `cydo` never becomes root. The app gives Cydia a root helper in its place, and repairs the part a
+  guest reboot undoes on every start.
+- **The phone's battery in the guest** — the charge, and the bolt while it charges — or a figure of
+  your own. The guest's SMC answers with it, so the status bar, Settings and apps all see the same.
+- **A network in the guest's status bar**: Wi-Fi or cellular as the phone has it, or whatever you
+  set. Only a picture — the machine has no modem and no Wi-Fi, and the guest's apps still see none.
+- **An agent in the guest** that takes the app's requests over the NVMe namespace instead of the
+  console, so one command stuck on the console no longer stalls everything else. The app puts it in
+  by itself and has launchd start it on every boot.
+- **A shell into the guest**, waiting for the bootstrap's bash rather than giving up on a slow boot.
 - **A real terminal**, not a log view: eighty columns, colours, cursor movement. `neofetch` draws
   its logo beside the text, `apt` redraws its progress line in place.
+- **English and Russian**, following the system's language unless told otherwise — the emulator's
+  log included, since that is what goes into a bug report.
 
 ## What does not
 
 - **Speed.** There is no KVM on iOS and there never will be — everything is translated. Boot takes
-  minutes, not seconds.
+  minutes, not seconds. What helps most is the translation buffer: measured on a phone, 64 MB gave
+  8–11 frames a second and 256 MB gave 21–25. It is 128 MB by default, because it shares the
+  process's memory with the guest; raise it in Settings → Translator.
 - **Only 3 GiB.** iOS kills a process at exactly that, entitlement or no entitlement, so the guest
   gets 2 GB and the rest is the app's own.
-- **Only 828×1792.** The machine accepts other panel sizes and the guest boots on them, but iOS
-  then draws nothing at all. Not solved.
+- **Only three panel sizes** — 828×1792, 752×1336 and 640×1136. A row of the frame has to be a
+  multiple of sixteen bytes, which is why the iPhone 8 is two pixels wider than the real one: at 750
+  the guest never finishes booting.
+- **No App Store apps.** Their binaries are encrypted with FairPlay, which only the real device that
+  bought them can undo, so they install and die on launch. The catalogue holds only what is
+  distributed outside the App Store.
+- **No dependency resolution.** The package manager installs what you pick and shows dpkg's
+  complaint as it is. Repositories that publish only `.zst` indexes do not open: iOS has nothing
+  to decompress them with.
+- **No sound yet.** There is an experimental switch: the guest builds its speaker device, but the
+  output route never comes up, so nothing plays.
 - **The guest sometimes drops its own network** after using it — a known iOS behaviour, worked
   around by asking it to bring the interface back up.
 
@@ -124,7 +160,7 @@ The app checks and refuses instead.
 ## Using it
 
 **The button** in the corner opens everything: the view (screen or terminal), starting and stopping
-the machine, files, device buttons. Drag it wherever you like.
+the machine, patches and packages, files, device buttons. Drag it wherever you like.
 
 **Network.** On by default. If the guest never takes an address, the menu has *Bring the network up
 in the guest*, which runs `ipconfig set en0 DHCP` on its console — the same thing the stock guide
@@ -132,14 +168,25 @@ tells you to type by hand.
 
 **Files.** *Send a file to the guest* puts it where the guest's own Files app will find it.
 *Fetch a file from the guest* takes a path and saves it into the app's `Guest` folder, visible in
-Files on the host phone.
+Files on the host phone. *Install an .ipa in the guest* installs an app from a file on the phone.
 
-**The shell.** The terminal's *Shell* tab opens a channel into the guest. Where the network is up it
-goes over a socket; where it is not, it falls back to the console with the shell's output marked so
-the kernel's cannot be mistaken for it.
+**Apps and packages** are under *Patches*. *App catalogue* and *Package manager* download on the
+phone and install into the guest; *Install a .deb into the guest* takes a package you already have.
+*Restart SpringBoard* is what Cydia calls a respring. *Repair the package manager* is the slow half
+of fixing Cydia, needed once per image — `firmware.sh` and configuring the bootstrap's packages —
+and can take minutes. The quick half runs by itself on every start, once the guest's shell is up;
+Settings → Machine can turn that off.
 
-**Settings** hold everything else: cores, memory, translator, screen, terminal, language, and
-diagnostics.
+**The shell.** The terminal's *Shell* tab opens a shell over the guest's console, with its output
+marked so the kernel's cannot be mistaken for it, and waits for the bootstrap's bash to come up — on
+a phone that can be minutes. When the kernel log is too noisy to share the console with, *Over the
+network* opens it over a socket instead.
+
+**The guest's battery and status bar** are in Settings: the battery follows the phone or holds a
+figure you set, and the status bar shows the phone's network, one you make up, or is left alone.
+
+**Settings** hold everything else: cores, memory, translator, screen, terminal, network, language,
+diagnostics, and the credits.
 
 ---
 
@@ -151,7 +198,7 @@ glib, pixman, libslirp, libucontext, lzfse, libpng, gmp, nettle and libtasn1.
 
 The emulator lives in its own repository — [a fork of Inferno](https://github.com/MakrSas/Inferno/tree/ios)
 carrying the changes iOS needed: the USB-NCM host, the built-in display, the coalesced UART, the
-address-space memory patch. Clone it beside this one:
+address-space memory patch, the extra NVMe namespace in the device tree. Clone it beside this one:
 
 ```bash
 git clone -b ios https://github.com/MakrSas/Inferno.git inferno-src
@@ -195,12 +242,16 @@ app icon with `actool`, ad-hoc signs everything and produces `Inferno.ipa`. Besi
 line tools it needs QEMU's keymaps — `brew install qemu` provides them, or point `INFERNO_KEYMAPS`
 at a copy. There is no Xcode project.
 
+It also wants `ldid` (`brew install ldid`), to sign the small programs the app carries into the
+guest with the entitlements they need. Without it the app still builds, but leaves them out — and
+with them the fast file channel, the agent and the status bar.
+
 ### Without a Mac — GitHub Actions
 
 [`.github/workflows/build-ipa.yml`](.github/workflows/build-ipa.yml) does all of the above on
 GitHub's own macOS runners, so a fork can produce an installable (unsigned) `Inferno.ipa` without
-anyone owning a Mac. It runs on every push to `main`, on `workflow_dispatch`, and — attaching the
-`.ipa` to the release — on any `v*` tag.
+anyone owning a Mac. It runs only when started by hand from the Actions tab (`workflow_dispatch`);
+the `.ipa` is attached to the run as an artifact. Release builds are made on a Mac, not here.
 
 The nine iOS dependencies are built from source by
 [`scripts/build-ios-deps.sh`](scripts/build-ios-deps.sh) (which also works locally:
@@ -225,8 +276,9 @@ PNG rendering of the same artwork — if it ever runs on an older Xcode.
 - **Something new** — a feature you would like to see, even a half-formed one.
 
 Write in English or Russian, whichever is easier. For a bug it helps to know the iPhone and its iOS
-version, the app's build (at the bottom of Settings), what you did and what happened. The app keeps
-`emulator.log` and `guest-console.log` in its folder in Files; attach them if you can.
+version, the app's build (in Settings), what you did and what happened. The app keeps
+`emulator.log` — and `emulator.prev.log`, the run before it, in case you restarted the app to see
+what went wrong — and `guest-console.log` in its folder in Files; attach them if you can.
 
 Pull requests are welcome too.
 

@@ -77,6 +77,46 @@ final class Settings: ObservableObject {
         willSet { objectWillChange.send() }
     }
 
+    // What the guest is told about the battery
+    @AppStorage("guestBatteryReal") var guestBatteryReal: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("guestBatteryPercent") var guestBatteryPercent: Double = 69 {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("guestBatteryCharging") var guestBatteryCharging: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+
+    // What the guest's status bar is made to show
+    @AppStorage("statusBarMode") var statusBarMode: String = GuestStatusBar.Mode.phone.rawValue {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarCarrier") var statusBarCarrier: String = "vm_operator" {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarBars") var statusBarBars: Int = 4 {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarNetwork") var statusBarNetwork: Int = GuestStatusBar.Network.lte.rawValue {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarWifi") var statusBarWifi: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarWifiBars") var statusBarWifiBars: Int = 3 {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarSecondSIM") var statusBarSecondSIM: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarVPN") var statusBarVPN: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarAirplane") var statusBarAirplane: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+
     // The link
     @AppStorage("network") var network: Bool = true {
         willSet { objectWillChange.send() }
@@ -193,6 +233,12 @@ struct SettingsView: View {
                     NavigationLink { NetworkSettings() } label: {
                         Label(L("Сеть"), systemImage: "network")
                     }
+                    NavigationLink { BatterySettings() } label: {
+                        Label(L("Батарея гостя"), systemImage: "battery.75percent")
+                    }
+                    NavigationLink { StatusBarSettings(model: model) } label: {
+                        Label(L("Строка состояния гостя"), systemImage: "antenna.radiowaves.left.and.right")
+                    }
                 }
 
                 Section {
@@ -224,6 +270,12 @@ struct SettingsView: View {
                 Section {
                     LabeledContent(L("Сборка"), value: BuildInfo.stamp)
                         .font(.footnote)
+                }
+
+                Section {
+                    NavigationLink { CreditsView() } label: {
+                        Label(L("Благодарности"), systemImage: "heart")
+                    }
                 }
             }
             .navigationTitle(L("Параметры"))
@@ -395,6 +447,118 @@ private struct MachineSettings: View {
             }
         }
         .navigationTitle(L("Машина"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What the guest's battery shows.
+///
+/// The machine's SMC answers from whatever is set here, so the figure reaches
+/// everything in the guest — the status bar, its settings, its apps — rather
+/// than being painted over one of them.
+private struct BatterySettings: View {
+    @ObservedObject var settings = Settings.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Picker(L("Заряд"), selection: $settings.guestBatteryReal) {
+                    Text(L("Как на телефоне")).tag(true)
+                    Text(L("Свой")).tag(false)
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text(L("Телефон отдаёт приложениям заряд с шагом 5 %, точнее iOS не говорит никому. Гость получает это число через SMC машины и показывает его как свой собственный."))
+            }
+
+            if !settings.guestBatteryReal {
+                Section {
+                    LabeledContent(L("Заряд"), value: L("%d %%", Int(settings.guestBatteryPercent)))
+                    Slider(value: $settings.guestBatteryPercent, in: 0...100, step: 1)
+                    Toggle(L("Заряжается"), isOn: $settings.guestBatteryCharging)
+                } footer: {
+                    Text(L("Гость узнаёт о смене сразу же: машина будит его драйвер батареи, а не ждёт, пока он спросит сам. Молния в строке состояния появляется за пару секунд."))
+                }
+            }
+        }
+        .onChange(of: settings.guestBatteryReal) { _ in HostBattery.shared.start() }
+        .onChange(of: settings.guestBatteryPercent) { _ in HostBattery.shared.start() }
+        .onChange(of: settings.guestBatteryCharging) { _ in HostBattery.shared.start() }
+        .navigationTitle(L("Батарея гостя"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What the guest's status bar shows of a network it does not have.
+private struct StatusBarSettings: View {
+    @ObservedObject var model: VMModel
+    @ObservedObject var settings = Settings.shared
+
+    private var mode: GuestStatusBar.Mode { GuestStatusBar.Mode(rawValue: settings.statusBarMode) ?? .off }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker(L("Сеть"), selection: $settings.statusBarMode) {
+                    ForEach(GuestStatusBar.Mode.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text(L("Только картинка: у машины нет ни модема, ни Wi-Fi, интернет у гостя идёт по USB, и его приложения никакой сети не увидят. «Как на телефоне» повторяет, Wi-Fi это или сотовая сеть и какого поколения. Уровня сигнала iOS приложениям не сообщает, поэтому он показан полным."))
+            }
+
+            if mode != .off {
+                Section {
+                    TextField(L("Имя оператора"), text: $settings.statusBarCarrier)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    Text(L("Оператор"))
+                } footer: {
+                    Text(L("В строке состояния iPhone с вырезом имени оператора нет, так что там его не видно."))
+                }
+            }
+
+            if mode == .custom {
+                Section(L("Сотовая сеть")) {
+                    Stepper(L("Полоски: %d из 4", settings.statusBarBars), value: $settings.statusBarBars, in: 0...4)
+                    Picker(L("Тип сети"), selection: $settings.statusBarNetwork) {
+                        ForEach(GuestStatusBar.Network.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                }
+                Section {
+                    Toggle(L("Wi-Fi"), isOn: $settings.statusBarWifi)
+                    if settings.statusBarWifi {
+                        Stepper(L("Уровень Wi-Fi: %d из 3", settings.statusBarWifiBars),
+                                value: $settings.statusBarWifiBars, in: 0...3)
+                    }
+                } footer: {
+                    Text(L("Значок Wi-Fi встаёт на место подписи типа сети: у iOS это одно и то же место."))
+                }
+                Section(L("Значки")) {
+                    Toggle(L("Вторая SIM"), isOn: $settings.statusBarSecondSIM)
+                    Toggle(L("VPN"), isOn: $settings.statusBarVPN)
+                    Toggle(L("Авиарежим"), isOn: $settings.statusBarAirplane)
+                }
+            }
+
+            Section {
+                Button(L("Применить сейчас"), systemImage: "arrow.clockwise") { model.paintStatusBar(force: true) }
+                    .disabled(!model.isRunning)
+            } footer: {
+                Text(L("Применяется и само: при запуске машины, после перезагрузки гостя и при каждом изменении здесь."))
+            }
+        }
+        .onChange(of: settings.statusBarMode) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarCarrier) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarBars) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarNetwork) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarWifi) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarWifiBars) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarSecondSIM) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarVPN) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarAirplane) { _ in model.paintStatusBar() }
+        .navigationTitle(L("Строка состояния гостя"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
