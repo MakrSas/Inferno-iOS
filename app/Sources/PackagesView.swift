@@ -60,7 +60,7 @@ struct PackagesView: View {
                 }
 
                 if store.packages.isEmpty, store.state == .idle {
-                    Text(L("Пусто. Потяните вниз, чтобы прочитать источники."))
+                    Text(L("Пусто. Перечитайте источники из меню «⋯»."))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -77,6 +77,10 @@ struct PackagesView: View {
                     Menu {
                         Toggle(L("Только установленные"), isOn: $onlyInstalled)
                         Button(L("Источники…"), systemImage: "list.bullet") { sources = true }
+                        // Pulling the list down does this on a phone; a Mac has no such gesture.
+                        Button(L("Перечитать источники"), systemImage: "tray.and.arrow.down") {
+                            Task { await store.refresh() }
+                        }
                         Button(L("Перечитать установленное"), systemImage: "arrow.clockwise") {
                             Task { installed = await model.installedPackages() }
                         }
@@ -119,6 +123,7 @@ struct PackagesView: View {
                 if installed.isEmpty { installed = await model.installedPackages() }
             }
         }
+        .sheetSize()
     }
 
     private func row(_ package: RepoPackage) -> some View {
@@ -201,5 +206,6 @@ private struct SourcesView: View {
                 }
             }
         }
+        .sheetSize(idealWidth: 500, idealHeight: 460)
     }
 }

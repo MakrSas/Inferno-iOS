@@ -110,7 +110,7 @@ struct CreditsView: View {
         }
         .navigationTitle(L("Благодарности"))
         .inlineNavigationTitle()
-        .sheet(item: $chosen) { CreditCard(credit: $0, avatars: avatars) }
+        .sheet(item: $chosen) { CreditCard(credit: $0, avatars: avatars).phoneSheetSize() }
     }
 
     private func row(_ credit: Credit) -> some View {

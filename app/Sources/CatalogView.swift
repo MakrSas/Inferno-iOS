@@ -44,7 +44,7 @@ struct CatalogView: View {
                 }
 
                 if store.apps.isEmpty, store.state == .idle {
-                    Text(L("Пусто. Потяните вниз, чтобы прочитать источники."))
+                    Text(L("Пусто. Перечитайте источники из меню «⋯»."))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -61,6 +61,10 @@ struct CatalogView: View {
                     Menu {
                         Toggle(L("Только для iOS 14"), isOn: $onlyFitting)
                         Button(L("Источники…"), systemImage: "list.bullet") { sources = true }
+                        // Pulling the list down does this on a phone; a Mac has no such gesture.
+                        Button(L("Перечитать источники"), systemImage: "tray.and.arrow.down") {
+                            Task { await store.refresh() }
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -70,6 +74,7 @@ struct CatalogView: View {
             .sheet(item: $chosen) { app in CatalogDetail(app: app, icons: icons) { install(app) } }
             .task { if store.apps.isEmpty { await store.refresh() } }
         }
+        .sheetSize()
     }
 
     private func row(_ app: CatalogApp) -> some View {
@@ -194,6 +199,7 @@ private struct CatalogDetail: View {
                 ToolbarItem(placement: .confirmationAction) { Button(L("Готово")) { dismiss() } }
             }
         }
+        .sheetSize(idealWidth: 500, idealHeight: 540)
     }
 }
 
@@ -237,6 +243,7 @@ private struct CatalogSourcesView: View {
                 ToolbarItem(placement: .confirmationAction) { Button(L("Готово")) { dismiss() } }
             }
         }
+        .sheetSize(idealWidth: 500, idealHeight: 460)
     }
 }
 
