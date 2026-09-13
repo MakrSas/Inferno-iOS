@@ -111,8 +111,6 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         if UserDefaults.standard.bool(forKey: "openSettings") { MacSettings.open() }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-
     /// Quitting under a running machine would stop QEMU in the middle of a
     /// write, as swiping the app away does on the phone. So the machine is told
     /// to quit first — QMP `quit` flushes the disks — and the app follows once
@@ -193,6 +191,18 @@ final class PhoneWindow: NSWindow, NSWindowDelegate {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    /// The bar's red and yellow buttons, and ⌘W and ⌘M. NSWindow's own
+    /// performClose: and performMiniaturize: act only for a window with those
+    /// buttons in its title bar; a borderless window has none, and they did
+    /// nothing at all. So the window does what the buttons mean itself.
+    override func performClose(_ sender: Any?) { close() }
+    override func performMiniaturize(_ sender: Any?) { miniaturize(sender) }
+
+    /// ⌘W is greyed out in a borderless window for the same reason.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        item.action == #selector(performClose(_:)) || super.validateUserInterfaceItem(item)
+    }
+
     /// The guest's screen in points: its framebuffer at the panel's own scale.
     static func screenSize(for panel: String) -> CGSize {
         let pixels = (GuestPanel(rawValue: panel) ?? .iphone11).pixels
@@ -222,6 +232,14 @@ final class PhoneWindow: NSWindow, NSWindowDelegate {
     }
 
     func windowDidResize(_ notification: Notification) { invalidateShadow() }
+
+    /// The window is the app: closing it quits, and the quit goes through
+    /// applicationShouldTerminate, which lets the machine write its disks. Even
+    /// with the settings still open — they would otherwise be left holding a
+    /// machine that no window shows.
+    func windowWillClose(_ notification: Notification) {
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
 
     func window(_ window: NSWindow, willUseFullScreenContentSize proposedSize: NSSize) -> NSSize { proposedSize }
     func windowWillEnterFullScreen(_ notification: Notification) { chromeState.fullScreen = true }
@@ -300,12 +318,11 @@ struct MacRootView: View {
             let outer = radius + PhoneChrome.side
             let full = chrome.fullScreen
             ZStack(alignment: .topLeading) {
-                // The chrome: a dark body the size of the window. Invisible at
-                // rest, so the window is only the screen. In full screen there
-                // is no window to shape: the body is plain black, always there,
-                // and has no corners.
-                chromeShape(bottom: full ? 0 : outer, top: full ? 0 : PhoneChrome.windowCornerRadius)
-                    .fill(full ? Color.black : Color(white: 0.11))
+                // The chrome: a body the size of the window. Invisible at rest,
+                // so the window is only the screen. In full screen there is no
+                // window to shape: the body is plain black, always there, and
+                // has no corners.
+                chromeBody(full: full, bottom: outer)
                     .overlay(
                         chromeShape(bottom: outer, top: PhoneChrome.windowCornerRadius)
                             .strokeBorder(.white.opacity(full ? 0 : 0.16), lineWidth: 1)
@@ -363,6 +380,23 @@ struct MacRootView: View {
     private func chromeShape(bottom: CGFloat, top: CGFloat) -> UnevenRoundedRectangle {
         UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
                                bottomTrailingRadius: bottom, topTrailingRadius: top, style: .continuous)
+    }
+
+    /// The chrome's body. In a window it is whatever lies behind the window,
+    /// blurred, as iPhone Mirroring's frame is: a material in a transparent
+    /// window blends with the desktop, not with the window. Under a dark veil,
+    /// and dark whatever the system's appearance, so that the white glyphs and
+    /// the traffic lights read on a light desktop too.
+    @ViewBuilder
+    private func chromeBody(full: Bool, bottom: CGFloat) -> some View {
+        if full {
+            Color.black
+        } else {
+            let shape = chromeShape(bottom: bottom, top: PhoneChrome.windowCornerRadius)
+            shape.fill(.ultraThinMaterial)
+                .overlay(shape.fill(Color.black.opacity(0.35)))
+                .environment(\.colorScheme, .dark)
+        }
     }
 
     /// Where the device's screen goes: inside the chrome's insets, at the
@@ -478,7 +512,8 @@ struct BarGlyph: View {
 
 /// The three standard window buttons, the real ones, placed in the bar the way
 /// iPhone Mirroring places them — so they look, highlight and behave exactly as
-/// on any other window.
+/// on any other window. Green is greyed out, as it is there; full screen is
+/// still in the menu.
 private struct TrafficLights: NSViewRepresentable {
     func makeNSView(context: Context) -> ButtonStack { ButtonStack() }
     func updateNSView(_ view: ButtonStack, context: Context) {}
@@ -501,20 +536,26 @@ private struct TrafficLights: NSViewRepresentable {
         required init?(coder: NSCoder) { fatalError("not used") }
 
         /// Aimed at the window once there is one: a borderless window does not
-        /// wire its buttons up by itself. Green is full screen, as on any window.
+        /// wire its buttons up by itself. Red and yellow land in PhoneWindow's
+        /// own performClose: and performMiniaturize:, since NSWindow's do
+        /// nothing without a title bar. Green gets no action and is disabled.
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard let window, buttons.count == 3 else { return }
-            let actions = [#selector(NSWindow.performClose(_:)), #selector(NSWindow.performMiniaturize(_:)),
-                           #selector(NSWindow.toggleFullScreen(_:))]
-            for (button, action) in zip(buttons, actions) {
-                button.target = window
-                button.action = action
-            }
+            buttons[0].target = window
+            buttons[0].action = #selector(NSWindow.performClose(_:))
+            buttons[1].target = window
+            buttons[1].action = #selector(NSWindow.performMiniaturize(_:))
+            buttons[2].action = nil
+            buttons[2].isEnabled = false
         }
 
         /// The glyphs appear on all three together while the pointer is over
-        /// any of them, as in a title bar. AppKit asks the container.
+        /// any of them, as in a title bar. Each button asks the container
+        /// through _mouseInGroup:, but only once it is told the pointer came or
+        /// went — mouseEnteredOrExited, which a title bar sends. Marked for
+        /// redrawing alone, a button draws what it drew before, and only green,
+        /// which follows the pointer by itself, ever lit up.
         private var inside = false
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -522,9 +563,18 @@ private struct TrafficLights: NSViewRepresentable {
             addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
                                            owner: self, userInfo: nil))
         }
-        override func mouseEntered(with event: NSEvent) { inside = true; buttons.forEach { $0.needsDisplay = true } }
-        override func mouseExited(with event: NSEvent) { inside = false; buttons.forEach { $0.needsDisplay = true } }
+        override func mouseEntered(with event: NSEvent) { pointer(inside: true) }
+        override func mouseExited(with event: NSEvent) { pointer(inside: false) }
         @objc func _mouseInGroup(_ button: NSButton) -> Bool { inside }
+
+        private func pointer(inside: Bool) {
+            self.inside = inside
+            let notify = NSSelectorFromString("mouseEnteredOrExited")
+            for button in buttons {
+                if button.responds(to: notify) { _ = button.perform(notify) }
+                button.needsDisplay = true
+            }
+        }
     }
 }
 
