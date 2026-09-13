@@ -521,13 +521,18 @@ enum GuestPackages {
             // Writing the two scripts costs a command per line, and the console
             // is held for all of them — long enough at every start for the shell
             // pane to give up waiting for its turn. So they are written only
-            // when they are not already there in this exact shape.
+            // when they are not already there in this exact shape. The marker
+            // alone does not say so: installing or upgrading Cydia puts the
+            // setuid original back over cydo and leaves the marker as it was,
+            // and Cydia was broken again with every check here passing. So cydo
+            // itself is looked at too.
             var stamp = PosixChecksum()
             let text = (rootScript + clientScript).joined(separator: "\n")
             text.utf8CString.withUnsafeBytes { stamp.update($0) }
             let version = String(format: "%08x", stamp.value)
             let marker = "/var/mobile/.inferno/cydo.version"
-            let same = shell.number("test -x /usr/libexec/cydia/cydo.real && "
+            let ours = "grep -qs '^# Stands in for Cydia' /usr/libexec/cydia/cydo"
+            let same = shell.number("test -x /usr/libexec/cydia/cydo.real && \(ours) && "
                                     + "grep -qs '^\(version)$' \(marker) && echo 1 || echo 0") == 1
 
             if !same {
@@ -536,7 +541,10 @@ enum GuestPackages {
             }
             let install = [
                 "chmod 755 /usr/libexec/cydia/cydo-root.sh",
-                "test -e /usr/libexec/cydia/cydo.real || mv /usr/libexec/cydia/cydo /usr/libexec/cydia/cydo.real",
+                // Any cydo but the stand-in is the original: the bootstrap's the
+                // first time, a newer Cydia's after an upgrade. Nothing runs
+                // cydo.real; it is kept to put back.
+                "\(ours) || mv -f /usr/libexec/cydia/cydo /usr/libexec/cydia/cydo.real",
                 same ? "true" : "cp /tmp/cydo.new /usr/libexec/cydia/cydo",
                 "chmod 755 /usr/libexec/cydia/cydo",
                 "rm -f /tmp/cydo.new",
