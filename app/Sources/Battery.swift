@@ -91,7 +91,10 @@ final class HostBattery {
         let percent = Int32((device.batteryLevel * 100).rounded())
         switch device.batteryState {
         case .charging:  return Reading(percent: percent, external: true, charging: true)
-        case .full:      return Reading(percent: percent, external: true, charging: false)
+        // Full on a cable still counts as charging. A real iPhone keeps the bolt
+        // at 100 %, but the guest lights it from CHSC alone, so reporting "in,
+        // not charging" took the bolt away exactly when the phone was full.
+        case .full:      return Reading(percent: percent, external: true, charging: true)
         case .unplugged: return Reading(percent: percent, external: false, charging: false)
         case .unknown:   return nil
         @unknown default: return nil
