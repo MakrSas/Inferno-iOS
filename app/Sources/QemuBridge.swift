@@ -86,7 +86,7 @@ final class QemuBridge {
             return
         }
 
-        LogCapture.shared.note("Библиотека загружена: \(path)")
+        LogCapture.shared.note(L("Библиотека загружена: %@", path))
         LogCapture.shared.note(L("Аргументы:\n  ") + arguments.joined(separator: " "))
 
         let qemuInit = unsafeBitCast(initSym, to: InitFn.self)
@@ -97,7 +97,8 @@ final class QemuBridge {
         // exceeds on its own. Both ends of the USB link therefore use a bare
         // file name resolved against this directory.
         if !FileManager.default.changeCurrentDirectoryPath(VMConfig.socketDirectory) {
-            LogCapture.shared.note("Не удалось перейти в \(VMConfig.socketDirectory) — USB-сокет может не подняться")
+            LogCapture.shared.note(L("Не удалось перейти в %@ — USB-сокет может не подняться",
+                                 VMConfig.socketDirectory))
         }
 
         let argv = arguments

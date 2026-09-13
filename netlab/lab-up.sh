@@ -54,25 +54,44 @@ cp -f "$SRC/ui/icons/CKQEMUBootSplash_512x512@2x.png" "$LAB/L/icons/CKQEMUBootSp
 # needed; linear smooths at any scale.
 export SDL_RENDER_SCALE_QUALITY="${SDL_RENDER_SCALE_QUALITY:-linear}"
 
-# An empty audio backend unless asked otherwise — see the header.
-QUIET_AUDIO="-audiodev none,id=quiet"
-[ -n "${SOUND:-}" ] && QUIET_AUDIO=""
+# The window keeps the pointer visible: the guest is driven by touches, and a
+# hidden cursor leaves you aiming blind.
+case "${GUI:-none}" in
+    sdl) DISPLAY_ARG="sdl,show-cursor=on" ;;
+    *)   DISPLAY_ARG="${GUI:-none}" ;;
+esac
+
+# What the machine's sound card is wired to. Named with -global, because the MCA
+# is created by the machine and cannot be given the property any other way — and
+# in the long form, because the short one (`-global driver=apple.mca,property=audiodev,value=snd`)
+# splits the name at its FIRST dot and looks for a type called `apple`. That
+# misses silently: the card is never registered, the guest plays into nothing,
+# and the only sign is `invalid class name` in the log.
+#
+#   (unset)    nothing on the other end — the host's own audio is untouched
+#   SOUND=wav  what the guest plays is written to a file, host still untouched
+#   SOUND=1    the host's own output, which on a Mac means coreaudio; see header
+case "${SOUND:-}" in
+    wav) AUDIO="-audiodev wav,id=snd,path=${WAV:-$LAB/guest-audio.wav} -global driver=apple.mca,property=audiodev,value=snd" ;;
+    "")  AUDIO="-audiodev none,id=quiet -global driver=apple.mca,property=audiodev,value=quiet" ;;
+    *)   AUDIO="" ;;
+esac
 
 rm -f "$QMP"
 D="$STAGE/InfernoData"
 "$QEMU" \
   -L "$LAB/L" -L /opt/homebrew/share/qemu -L "$SRC/build-macos/qemu-bundle/opt/homebrew/share/qemu" \
   -accel "tcg,thread=multi,tb-size=${TB:-128}${SPLITWX:+,split-wx=$SPLITWX}" \
-  -M "t8030${DISP:+,$DISP}${USBCONN:+,usb-conn-type=unix,usb-conn-addr=$SOCK},trustcache=$D/Restore/Firmware/038-44135-124.dmg.trustcache,ticket=$D/root_ticket.der,sep-fw=$D/sep-firmware.n104.RELEASE.new.img4,sep-rom=$STAGE/AppleSEPROM-Cebu-B1,kaslr-off=true" \
+  -M "t8030${DISP:+,$DISP}${USBCONN:+,usb-conn-type=unix,usb-conn-addr=$SOCK},trustcache=$D/Restore/Firmware/038-44135-124.dmg.trustcache,ticket=$D/root_ticket.der,sep-fw=$D/sep-firmware.n104.RELEASE.new.img4,sep-rom=$STAGE/AppleSEPROM-Cebu-B1,kaslr-off=true,boot-mode=exit_recovery" \
   -kernel "$D/Restore/kernelcache.release.iphone12b" \
   -dtb "$D/Restore/Firmware/all_flash/DeviceTree.n104ap.im4p" \
-  -append 'tlto_us=-1 mtxspin=-1 agm-genuine=1 agm-authentic=1 agm-trusted=1 serial=3 wdt=-1 launchd_unsecure_cache=1 -vm_compressor_wk_sw' \
+  -append "tlto_us=-1 mtxspin=-1 agm-genuine=1 agm-authentic=1 agm-trusted=1 serial=${SERIAL:-3} wdt=-1 launchd_unsecure_cache=1 -vm_compressor_wk_sw${AUDIO_BOOTARGS:-}" \
   -smp 4 -m "${MEM:-4G}" \
   -chardev "socket,id=serial0,host=127.0.0.1,port=4555,server=on,wait=off,logfile=${GLOG:-$LAB/guest.log},logappend=off" \
   -serial chardev:serial0 \
   -qmp "unix:$QMP,server,nowait" \
-  -display "${GUI:-none}" \
-  $QUIET_AUDIO \
+  -display "$DISPLAY_ARG" \
+  $AUDIO \
   ${VNC:+-vnc 127.0.0.1:0,password=on} \
   ${NET:+-netdev user,id=n0} \
   ${NET:+-device apple-ncm-host,netdev=n0,conn-addr=$SOCK} \

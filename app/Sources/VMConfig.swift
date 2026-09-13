@@ -10,7 +10,6 @@ struct VMConfig {
     var vncPort: UInt16 = 5900
     var serialPort: UInt16 = 4555
     var qmpPort: UInt16 = 4556
-    var tcgThreads: String = "multi"
     var tbSize: Int = 128
     /// Reverse tethering over the guest's own USB port: the emulator plays the
     /// USB host, brings up the device's CDC-NCM interface and NATs through
@@ -104,13 +103,31 @@ struct VMConfig {
 
     static func missingFiles() -> [String] {
         var missing = requiredFiles.compactMap { entry -> String? in
-            let url = documents.appendingPathComponent(entry.relativePath)
-            return FileManager.default.fileExists(atPath: url.path) ? nil : entry.label
+            let url = documents.appendingPathComponent(entry.relativePath).resolvingSymlinksInPath()
+            return usable(url) ? nil : entry.label
         }
         if rootImage == nil {
             missing.insert(L("Диск устройства (root.qcow2 или root)"), at: 0)
         }
         return missing
+    }
+
+    /// Whether a file the emulator needs is actually a file.
+    ///
+    /// Asking `fileExists` is not enough, and the difference is not academic:
+    /// an unpacked archive can leave a *folder* named `firmware`, the check
+    /// passes, Start is enabled, and then QEMU says `'file' driver requires
+    /// '…/firmware' to be a regular file` and calls `exit(1)` — from inside
+    /// `qemu_init`, which runs in our own process, so the whole app goes down
+    /// and it looks like a crash. An empty file does the same. Reported as
+    /// issue #5.
+    private static func usable(_ url: URL) -> Bool {
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory),
+              !directory.boolValue
+        else { return false }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64
+        return (size ?? 0) > 0
     }
 
     func arguments() -> [String] {
@@ -131,6 +148,14 @@ struct VMConfig {
             "sep-fw=\(data)/sep-firmware.n104.RELEASE.new.img4",
             "sep-rom=\(sep)",
             "kaslr-off=true",
+            // The machine boots whatever NVRAM says, and NVRAM can say
+            // `auto-boot=false` — left there by a restore that did not finish.
+            // Then it heads for recovery, wants a ramdisk nobody passed, and
+            // the emulator quits with `RAM Disk required for recovery` before
+            // the guest exists. This app only ever runs an installed system, so
+            // it asks for the way out of recovery every time: on a machine that
+            // was fine this changes nothing.
+            "boot-mode=exit_recovery",
             "disp-width=\(displayWidth)",
             "disp-height=\(displayHeight)",
             "disp-scale=\(displayScale)",
@@ -145,11 +170,14 @@ struct VMConfig {
             "qemu-system-aarch64",
             "-L", dataDir,
             // Multi-threaded TCG: the only acceleration available here, since
-            // iOS gives no hypervisor access to applications.
+            // iOS gives no hypervisor access to applications. Never single: the
+            // SEP and the AP cores have to move together, and on one thread the
+            // SEP panics initialising its key store, so the guest never boots.
+            // That used to be a setting, and it only ever caught people out.
             // split-wx maps the translation buffer twice — writable and
             // executable — which is what a debugger-enabled process is allowed
             // to do when MAP_JIT is refused.
-            "-accel", "tcg,thread=\(tcgThreads),tb-size=\(tbSize)"
+            "-accel", "tcg,thread=multi,tb-size=\(tbSize)"
                 + (JIT.needsSplitWX ? ",split-wx=on" : ""),
             "-M", machine,
             "-kernel", "\(data)/Restore/kernelcache.release.iphone12b",
@@ -171,7 +199,12 @@ struct VMConfig {
         if !audio {
             // Silence is asked for explicitly: with no audiodev named, the
             // machine's sound card takes the first output the build offers.
-            argv += ["-audiodev", "none,id=quiet"]
+            // The global is written in its long form on purpose — the short
+            // one splits the driver name at its first dot, and this driver is
+            // called `apple.mca`, so `-global apple.mca.audiodev=quiet` looks
+            // for a device called `apple` and is quietly dropped.
+            argv += ["-audiodev", "none,id=quiet",
+                     "-global", "driver=apple.mca,property=audiodev,value=quiet"]
         }
 
         if headless || builtInDisplay {

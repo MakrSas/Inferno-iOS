@@ -8,7 +8,7 @@ struct InfernoApp: App {
         Bootstrap.prepareDocuments()
         // Start capturing before anything can fail, so the reason is on screen.
         LogCapture.shared.start()
-        LogCapture.shared.note("Сборка приложения: \(BuildInfo.stamp)")
+        LogCapture.shared.note(L("Сборка приложения: %@", BuildInfo.stamp))
         // Must happen before the emulator asks for its translation buffer.
         JIT.prepare()
     }
@@ -17,7 +17,6 @@ struct InfernoApp: App {
         WindowGroup {
             RootView()
                 .preferredColorScheme(.dark)
-                .statusBarHidden(true)
         }
     }
 }
@@ -93,6 +92,13 @@ final class VMModel: ObservableObject {
     private(set) lazy var shell = ShellChannel(
         serial: serial,
         linkUp: { [weak self] in self?.linkIsUp ?? false })
+
+    /// The agent inside the guest, once it is found or installed — the app's way
+    /// past the single console. Nil while it is being brought up, and for good
+    /// on a build or an emulator that cannot have one, in which case everything
+    /// falls back to the console as before. Read and written on the main thread.
+    private(set) var guestAgent: GuestAgent?
+    private var agentBringUpStarted = false
     private lazy var qmp = QMPClient(port: config.qmpPort)
     var config: VMConfig { Settings.shared.config }
 
@@ -139,7 +145,13 @@ final class VMModel: ObservableObject {
     func start() {
         refreshFiles()
         refreshJIT()
-        guard missing.isEmpty else { return }
+        // Said out loud, and into the log. The button is disabled in this case,
+        // so from outside it is "I press Start and nothing happens" — and the
+        // log people send with that report has nothing in it at all.
+        guard missing.isEmpty else {
+            LogCapture.shared.note(L("Запуск отменён: не хватает файлов — %@", missing.joined(separator: ", ")))
+            return
+        }
         // Starting without executable memory does not fail — it wedges the
         // vCPU on the first generated instruction, which is far harder to read
         // than a refusal.
@@ -170,14 +182,39 @@ final class VMModel: ObservableObject {
                         }
                         else {
                             let why = L("в этой сборке библиотеки нет встроенного вывода")
-                            LogCapture.shared.note("Экран: \(why). Переключитесь на VNC в параметрах.")
+                            LogCapture.shared.note(L("Экран: %@. Переключитесь на VNC в параметрах.", why))
                             self.displayStatus = .failed(why)
                         }
                     }
                     self.serial.follow()
                     self.serial.attachInput(port: self.config.serialPort)
+                    // The shell is opened without waiting for anyone to look at
+                    // its pane. It waits for the bootstrap's bash by itself, and
+                    // having it from the start is what keeps the rest working:
+                    // the console channel needs no link, while the guest puts
+                    // its own end of the USB network down once it has booted,
+                    // and a shell asked for later would be waiting on that.
+                    self.shell.connect()
                 }
+                // The library is loaded by now, so the battery can be handed
+                // over before the guest's driver first asks for it.
+                HostBattery.shared.start()
+                // The status bar: once SpringBoard is up, and again whenever the
+                // phone's own connection changes while the guest follows it.
+                PhoneNetwork.shared.onChange = { [weak self] in
+                    guard Settings.shared.statusBarMode == GuestStatusBar.Mode.phone.rawValue else { return }
+                    self?.paintStatusBar()
+                }
+                PhoneNetwork.shared.start()
+                // Bring up the agent in the background: install it if this is a
+                // fresh guest, find it if it is already there. It takes over the
+                // status bar and the service commands from the console. Started
+                // after a delay so a fresh boot has reached a shell first.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.bringUpAgent() }
+                self.paintStatusBarWhenReady(delay: 30)
                 if self.config.network { self.watchNetwork() }
+                if Settings.shared.autoRepairPackages { self.preparePackages() }
+                self.serial.onGuestDeath = { [weak self] in self?.guestDied() }
                 // Report what the machine is doing once it has had time to boot.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     self.inspectMachine()
@@ -226,6 +263,24 @@ final class VMModel: ObservableObject {
     /// saying so from inside, which is what the stock guide has always told
     /// people to do by hand.
     func fixNetwork() {
+        // Through the agent when there is one: it reaches the guest off the
+        // console, so this works even while the console is busy — which is when
+        // the network most often needs a nudge.
+        if let agent = guestAgent {
+            DispatchQueue.global(qos: .utility).async {
+                let job = agent.run("/usr/sbin/ipconfig set en0 DHCP", timeout: 90)
+                DispatchQueue.main.async {
+                    if job != nil {
+                        LogCapture.shared.note(L("Сеть (агент): попросил гостя поднять en0."))
+                    } else if !agent.isAlive() {
+                        self.guestAgent = nil
+                        LogCapture.shared.note(L("Агент пропал — сеть подниму через консоль."))
+                        self.fixNetwork()
+                    }
+                }
+            }
+            return
+        }
         // Never in the middle of somebody else's conversation with the console:
         // a command landing between two lines of a file transfer breaks it, and
         // the poke can always wait for the next round.
@@ -234,6 +289,452 @@ final class VMModel: ObservableObject {
             serial.send("/usr/sbin/ipconfig set en0 DHCP\n")
         }
         if !sent { LogCapture.shared.note(L("Сеть: консоль занята, попрошу позже.")) }
+    }
+
+    /// Downloads a package and installs it, showing both in the same banner as
+    /// every other transfer — so the manager can be closed the moment it starts
+    /// and the guest's screen watched instead.
+    func installFromRepo(name: String, id: String, version: String, url: URL, size: Int64) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        transfer = .running(title: L("↓ %@", name), done: 0, total: size)
+        LogCapture.shared.note(L("Пакеты: качаю %@", name))
+
+        Task {
+            do {
+                var request = URLRequest(url: url)
+                request.setValue("Telesphoreo APT-HTTP/1.0.592", forHTTPHeaderField: "User-Agent")
+                request.setValue("iPhone12,1", forHTTPHeaderField: "X-Machine")
+                request.setValue("14.0", forHTTPHeaderField: "X-Firmware")
+                request.timeoutInterval = 60
+
+                let (stream, response) = try await URLSession.shared.bytes(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw GuestFiles.Failure.io(L("репозиторий ответил %d",
+                                                  (response as? HTTPURLResponse)?.statusCode ?? 0))
+                }
+
+                let total = max(response.expectedContentLength, size)
+                var body = Data()
+                body.reserveCapacity(Int(max(total, 0)))
+                var shown = Date.distantPast
+                for try await byte in stream {
+                    body.append(byte)
+                    if Date().timeIntervalSince(shown) > 0.1 {
+                        shown = Date()
+                        self.transfer = .running(title: L("↓ %@", name), done: Int64(body.count), total: total)
+                    }
+                }
+
+                let file = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("\(id)_\(version).deb")
+                try? FileManager.default.removeItem(at: file)
+                try body.write(to: file)
+
+                self.transfer = nil
+                self.installDEB(file)
+            }
+            catch {
+                self.transfer = .failed(error.localizedDescription)
+                LogCapture.shared.note(L("Пакеты: %@ — %@", name, error.localizedDescription))
+            }
+        }
+    }
+
+    /// Takes an app from the catalogue: downloaded here, where the network is
+    /// real, then handed to the guest by the same installer the `.ipa` button
+    /// uses — so it gets the same channel, the same checking and the same
+    /// banner.
+    func installCatalogApp(name: String, url: URL, size: Int64) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        transfer = .running(title: L("↓ %@", name), done: 0, total: size)
+        LogCapture.shared.note(L("Каталог: качаю %@", name))
+
+        Task {
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 120
+                let (stream, response) = try await URLSession.shared.bytes(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw GuestFiles.Failure.io(L("источник ответил %d",
+                                                  (response as? HTTPURLResponse)?.statusCode ?? 0))
+                }
+
+                let total = max(response.expectedContentLength, size)
+                var body = Data()
+                body.reserveCapacity(Int(max(total, 0)))
+                var shown = Date.distantPast
+                for try await byte in stream {
+                    body.append(byte)
+                    if Date().timeIntervalSince(shown) > 0.1 {
+                        shown = Date()
+                        self.transfer = .running(title: L("↓ %@", name), done: Int64(body.count), total: total)
+                    }
+                }
+
+                let file = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(GuestFiles.safeName(name) + ".ipa")
+                try? FileManager.default.removeItem(at: file)
+                try body.write(to: file)
+
+                self.transfer = nil
+                self.installIPA(file)
+            }
+            catch {
+                self.transfer = .failed(error.localizedDescription)
+                LogCapture.shared.note(L("Каталог: %@ — %@", name, error.localizedDescription))
+            }
+        }
+    }
+
+    /// What the guest has installed, for the package manager to mark.
+    func installedPackages() async -> [String: String] {
+        let serial = self.serial
+        let files = self.files
+        return await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .userInitiated).async {
+                done.resume(returning: (try? GuestPackages.installed(serial: serial, files: files)) ?? [:])
+            }
+        }
+    }
+
+    /// Removes a package the guest has.
+    func removePackage(_ package: String) {
+        guard isRunning, transfer?.isRunning != true else { return }
+        transfer = .running(title: L("Удаляю %@…", package), done: 0, total: 0)
+        let serial = self.serial
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let said = try GuestPackages.remove(package, serial: serial)
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Пакет удалён.") + (said.isEmpty ? "" : "\n" + said))
+                    LogCapture.shared.note(L("Пакеты: %@ удалён.", package))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note(L("Пакеты: %@ — %@", package, error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Restarts the guest's SpringBoard, which is how a freshly installed tweak
+    /// gets loaded.
+    func respring() {
+        guard isRunning else { return }
+        let serial = self.serial
+        LogCapture.shared.note(L("Перезапускаю SpringBoard…"))
+        DispatchQueue.global(qos: .userInitiated).async {
+            do { try GuestPackages.respring(serial: serial) }
+            catch { LogCapture.shared.note(L("SpringBoard: %@", error.localizedDescription)) }
+        }
+        // A new SpringBoard knows nothing of the status bar override.
+        paintedStatusBar = nil
+        paintStatusBarWhenReady(delay: 20)
+    }
+
+    // MARK: The agent
+
+    /// How many times a transient agent bring-up has been retried, so a guest
+    /// that is simply slow to reach a shell is waited out, but a permanent
+    /// refusal is not hammered.
+    private var agentAttempts = 0
+
+    /// Finds or installs the guest agent, off the main thread, and once it is up
+    /// hands it the status bar so the console is out of that loop. Safe to call
+    /// again — it does nothing while a bring-up is in flight or already done.
+    func bringUpAgent(force: Bool = false) {
+        guard isRunning else { return }
+        if force { agentBringUpStarted = false; guestAgent = nil; agentAttempts = 0 }
+        guard !agentBringUpStarted, guestAgent == nil else { return }
+        agentBringUpStarted = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let outcome = GuestAgentSetup.bringUp(serial: self.serial) { line in
+                LogCapture.shared.note(L("Агент: %@", line))
+            }
+            DispatchQueue.main.async {
+                switch outcome {
+                case .installed(let agent):
+                    self.guestAgent = agent
+                    self.agentAttempts = 0
+                    LogCapture.shared.note(L("Агент готов: команды и строка состояния идут мимо консоли."))
+                    // Hand it the status bar straight away, and let it keep it.
+                    self.paintStatusBar(force: true)
+                case .unavailable(let why, let retry):
+                    // Not an error: the console path stays. A guest that has not
+                    // reached a shell yet is worth trying again; a build or an
+                    // emulator that cannot have an agent is not.
+                    self.agentBringUpStarted = false
+                    if retry, self.agentAttempts < 8, self.isRunning {
+                        self.agentAttempts += 1
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { self.bringUpAgent() }
+                    } else {
+                        LogCapture.shared.note(L("Агент не поднят (%@) — работаю через консоль.", why))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: The guest's status bar
+
+    /// The helper arguments last drawn, so that nothing is redrawn for nothing.
+    private var paintedStatusBar: String?
+    private var paintQueued = false
+
+    /// Draws what the status bar settings ask for.
+    ///
+    /// Coalesced for a second: a text field or a stepper changes many times in
+    /// a row, and every change would otherwise be a console conversation.
+    func paintStatusBar(force: Bool = false) {
+        guard isRunning else { return }
+        if force { paintedStatusBar = nil }
+        guard !paintQueued else { return }
+        paintQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            self.paintQueued = false
+            let look = GuestStatusBar.requested()
+            let arguments = look?.arguments ?? "-z"
+            // Nothing drawn and nothing wanted: the helper need not even be
+            // carried in.
+            guard arguments != self.paintedStatusBar, look != nil || self.paintedStatusBar != nil else { return }
+
+            // The agent's way: hand it the look and it keeps it applied by
+            // itself, through resprings and a busy console alike. This is sent
+            // once, not on a timer.
+            if let agent = self.guestAgent {
+                DispatchQueue.global(qos: .utility).async {
+                    let ok = agent.setStatusBar(look?.json)
+                    DispatchQueue.main.async {
+                        if ok {
+                            self.paintedStatusBar = look == nil ? nil : arguments
+                            LogCapture.shared.note(L("Строка состояния гостя (агент): %@", arguments))
+                        } else if agent.isAlive() {
+                            LogCapture.shared.note(L("Строка состояния гостя: агент не принял."))
+                        } else {
+                            // The agent went away; drop back to the console.
+                            self.guestAgent = nil
+                            LogCapture.shared.note(L("Агент пропал — возвращаюсь на консоль для строки состояния."))
+                            self.paintStatusBar(force: true)
+                        }
+                    }
+                }
+                return
+            }
+
+            // Said out loud: a change that silently did nothing is what made
+            // this look broken on the phone.
+            guard self.serial.interactive else {
+                LogCapture.shared.note(L("Строка состояния гостя: консоль гостя не готова, попробую позже."))
+                return
+            }
+            let serial = self.serial
+            DispatchQueue.global(qos: .utility).async {
+                let outcome = Result { try serial.exclusive { try GuestStatusBar.apply(look, shell: GuestShell(serial: serial)) } }
+                DispatchQueue.main.async {
+                    switch outcome {
+                    case .success:
+                        self.paintedStatusBar = look == nil ? nil : arguments
+                        LogCapture.shared.note(L("Строка состояния гостя: %@", arguments))
+                    case .failure(let error):
+                        LogCapture.shared.note(L("Строка состояния гостя: не вышло — %@", error.localizedDescription))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Which round of repainting is current; an older one stops when it sees
+    /// a newer one has started.
+    private var statusBarRounds = 0
+
+    /// Keeps the status bar drawn while the guest comes up and afterwards.
+    ///
+    /// SpringBoard starts its status bar server some way into the boot, and an
+    /// override sent before that is lost. Asking the guest whether SpringBoard
+    /// is there was tried, and cost the console: `ps -A` hung on a busy guest
+    /// and took bash down with it, and the shell pane, the packages and this
+    /// all typed into a console nobody read after that. The override is safe
+    /// to send twice, so it is simply sent again — every half minute while the
+    /// guest boots, then every minute, which also brings it back soon after
+    /// SpringBoard restarts on its own. Each time only if the console is free:
+    /// nothing waits for this.
+    private func paintStatusBarWhenReady(delay: TimeInterval) {
+        statusBarRounds += 1
+        let round = statusBarRounds
+        let pauses: [TimeInterval] = [delay, 30, 30, 30, 30]
+
+        func tick(_ step: Int) {
+            guard isRunning, round == statusBarRounds else { return }
+            repaintStatusBarQuietly()
+            let next = step + 1 < pauses.count ? pauses[step + 1] : 60
+            DispatchQueue.main.asyncAfter(deadline: .now() + next) { tick(step + 1) }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { tick(0) }
+    }
+
+    /// One repaint that gives way to anybody else on the console and says
+    /// nothing unless it fails.
+    private func repaintStatusBarQuietly() {
+        // With the agent up there is nothing to do here: it reapplies the
+        // override on its own, including after a respring, without the console.
+        if guestAgent != nil { return }
+        guard serial.interactive, let look = GuestStatusBar.requested() else { return }
+        let serial = self.serial
+        DispatchQueue.global(qos: .utility).async {
+            var outcome: Result<Void, Error>?
+            serial.ifFree {
+                outcome = Result { try GuestStatusBar.apply(look, shell: GuestShell(serial: serial)) }
+            }
+            guard let outcome else { return }
+            DispatchQueue.main.async {
+                switch outcome {
+                case .success:
+                    if self.paintedStatusBar != look.arguments {
+                        LogCapture.shared.note(L("Строка состояния гостя: %@", look.arguments))
+                    }
+                    self.paintedStatusBar = look.arguments
+                case .failure(let error):
+                    LogCapture.shared.note(L("Строка состояния гостя: не вышло — %@", error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Installs a `.deb` without Cydia: the guest is too slow for Cydia to
+    /// survive its own packager, and this path has nothing watching a clock.
+    func installDEB(_ url: URL) {
+        guard transfer?.isRunning != true else { return }
+        if let why = transferBlocker() { transfer = .failed(why); return }
+        let name = url.lastPathComponent
+        transfer = .running(title: L("→ пакет %@", name), done: 0, total: 0)
+        LogCapture.shared.note(L("Пакеты: ставлю %@", name))
+        let serial = self.serial
+        let files = self.files
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            var phase = L("→ пакет %@", name)
+            do {
+                var last = Date.distantPast
+                let said = try GuestPackages.installDeb(url, serial: serial, files: files, progress: { done, total in
+                    guard Date().timeIntervalSince(last) > 0.1 || done == total else { return }
+                    last = Date()
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: phase, done: done, total: total)
+                    }
+                }, note: { line in
+                    phase = line
+                    DispatchQueue.main.async { self.transfer = .running(title: line, done: 0, total: 0) }
+                })
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Пакет установлен.") + (said.isEmpty ? "" : "\n" + said))
+                    LogCapture.shared.note(L("Пакеты: %@ установлен.", name))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note(L("Пакеты: %@ — %@", name, error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Re-does the part of the package repair that a guest reboot undoes.
+    ///
+    /// The remount and the root helper do not survive a restart, and without
+    /// them Cydia fails with `cydo returned an error code (2)` — an error that
+    /// says nothing about why. Only the quick half runs here; the slow half is
+    /// needed once per image and stays on the button.
+    private func preparePackages(delay: TimeInterval = 45) {
+        let serial = self.serial
+        var attempts = 0
+
+        func attempt() {
+            guard isRunning else { return }
+            guard serial.interactive else {
+                attempts += 1
+                guard attempts < 150 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { attempt() }
+                return
+            }
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    let complaints = try GuestPackages.prepare(serial: serial)
+                    let tail = complaints.isEmpty ? "" : " " + complaints.joined(separator: " ")
+                    LogCapture.shared.note(L("Пакеты: гость подготовлен.") + tail)
+                }
+                catch {
+                    LogCapture.shared.note(L("Пакеты: подготовить не вышло — %@", error.localizedDescription))
+                }
+            }
+        }
+
+        // Not ten seconds in: the guest is still booting then, and it puts the
+        // root back read-only on its way up — the remount answered 0 and meant
+        // nothing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { attempt() }
+    }
+
+    /// The guest panicked and the watchdog is restarting it.
+    ///
+    /// Everything the package manager needs — the writable root, the folders,
+    /// the root helper — is undone by that, and the guest gives no other sign:
+    /// the app goes on running, the console goes on printing, and Cydia is
+    /// quietly broken again. So the same preparation that runs at startup runs
+    /// again, once the machine has had time to come back up.
+    private func guestDied() {
+        LogCapture.shared.note(L("Гость упал: %@", serial.guestDeathReason))
+        // The status bar override lived in the SpringBoard that just went away.
+        paintedStatusBar = nil
+        // The agent instance died with the guest. It starts itself again from
+        // the launchd cache on the way back up, so the client is dropped and
+        // found afresh once the machine has had time to boot; the console keeps
+        // the status bar meanwhile.
+        guestAgent = nil
+        agentBringUpStarted = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in self?.bringUpAgent() }
+        paintStatusBarWhenReady(delay: 150)
+        guard Settings.shared.autoRepairPackages, isRunning else { return }
+        LogCapture.shared.note(L("Гость упал в панику — поднимаю менеджер пакетов заново, когда вернётся."))
+        preparePackages(delay: 150)
+    }
+
+    /// Puts the guest's package manager back together — the fix for Cydia's
+    /// `cydo returned an error code (2)`.
+    ///
+    /// Offered as a button rather than done at every boot because it writes to
+    /// the guest's own system volume; the part that does not survive a reboot
+    /// is the remount, so pressing it again after one is normal.
+    func repairPackages() {
+        guard isRunning, transfer?.isRunning != true else { return }
+        transfer = .running(title: L("Чиню менеджер пакетов…"), done: 0, total: 0)
+        LogCapture.shared.note(L("Пакеты: чиню dpkg в госте…"))
+        let serial = self.serial
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let complaints = try GuestPackages.repair(serial: serial, note: { line in
+                    DispatchQueue.main.async {
+                        self.transfer = .running(title: line, done: 0, total: 0)
+                    }
+                })
+                let tail = complaints.isEmpty ? "" : "\n" + complaints.joined(separator: "\n")
+                DispatchQueue.main.async {
+                    self.transfer = .finished(L("Менеджер пакетов починен. Попробуйте Cydia снова.") + tail)
+                    LogCapture.shared.note(L("Пакеты: готово.") + tail)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.transfer = .failed(error.localizedDescription)
+                    LogCapture.shared.note(L("Пакеты: не вышло — %@", error.localizedDescription))
+                }
+            }
+        }
     }
 
     /// Watches the link and, if it never comes up, uses the guest's own shell.
@@ -266,7 +767,7 @@ final class VMModel: ObservableObject {
             }
             if Settings.shared.netAutoFix, attempts < tries {
                 attempts += 1
-                LogCapture.shared.note("Сеть: адреса всё ещё нет, попытка \(attempts) из \(tries).")
+                LogCapture.shared.note(L("Сеть: адреса всё ещё нет, попытка %d из %d.", attempts, tries))
                 fixNetwork()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: check)
                 return
@@ -284,7 +785,8 @@ final class VMModel: ObservableObject {
     private lazy var files = GuestFiles(
         serial: serial,
         linkUp: { [weak self] in self?.linkIsUp ?? false },
-        bringNetworkUp: { [weak self] in DispatchQueue.main.async { self?.fixNetwork() } })
+        bringNetworkUp: { [weak self] in DispatchQueue.main.async { self?.fixNetwork() } },
+        agent: { [weak self] in self?.guestAgent })
 
     /// Checks what can be checked on the spot, so a transfer that cannot work
     /// says why at once instead of after a minute of waiting.
@@ -299,7 +801,7 @@ final class VMModel: ObservableObject {
         if let why = transferBlocker() { transfer = .failed(why); return }
         let name = url.lastPathComponent
         transfer = .running(title: "→ \(name)", done: 0, total: 0)
-        LogCapture.shared.note("Файлы: отправляю \(name) в гостя")
+        LogCapture.shared.note(L("Файлы: отправляю %@ в гостя", name))
         let files = self.files
         DispatchQueue.global(qos: .userInitiated).async {
             // Files picked from the Files app are lent, not given.
@@ -317,12 +819,12 @@ final class VMModel: ObservableObject {
                 let summary = TransferState.summary(url: url, seconds: Date().timeIntervalSince(started))
                 DispatchQueue.main.async {
                     self.transfer = .finished("\(name) → \(remote)\n\(summary)")
-                    LogCapture.shared.note("Файлы: \(name) → \(remote), \(summary)")
+                    LogCapture.shared.note(L("Файлы: %@ → %@, %@", name, remote, summary))
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.transfer = .failed(error.localizedDescription)
-                    LogCapture.shared.note("Файлы: \(name) не отправлен — \(error.localizedDescription)")
+                    LogCapture.shared.note(L("Файлы: %@ не отправлен — %@", name, error.localizedDescription))
                 }
             }
         }
@@ -339,7 +841,7 @@ final class VMModel: ObservableObject {
         }
         let name = url.lastPathComponent
         transfer = .running(title: L("→ установка %@", name), done: 0, total: 0)
-        LogCapture.shared.note("Установка: \(name)")
+        LogCapture.shared.note(L("Установка: %@", name))
         let installer = GuestInstaller(serial: serial, files: files)
         DispatchQueue.global(qos: .userInitiated).async {
             // Files picked from the Files app are lent, not given.
@@ -370,12 +872,12 @@ final class VMModel: ObservableObject {
                 let caveat = installer.warning.map { "\n" + $0 } ?? ""
                 DispatchQueue.main.async {
                     self.transfer = .finished(L("Установлено: %@", target) + "\n" + summary + caveat)
-                    LogCapture.shared.note("Установка: \(name) → \(target), \(summary)\(caveat)")
+                    LogCapture.shared.note(L("Установка: %@ → %@, %@", name, target, summary) + caveat)
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.transfer = .failed(error.localizedDescription)
-                    LogCapture.shared.note("Установка: \(name) — \(error.localizedDescription)")
+                    LogCapture.shared.note(L("Установка: %@ — %@", name, error.localizedDescription))
                 }
             }
         }
@@ -387,7 +889,7 @@ final class VMModel: ObservableObject {
         if let why = transferBlocker() { transfer = .failed(why); return }
         let name = (remote as NSString).lastPathComponent
         transfer = .running(title: "← \(name)", done: 0, total: 0)
-        LogCapture.shared.note("Файлы: забираю \(remote) из гостя")
+        LogCapture.shared.note(L("Файлы: забираю %@ из гостя", remote))
         let files = self.files
         DispatchQueue.global(qos: .userInitiated).async {
             let started = Date()
@@ -401,12 +903,12 @@ final class VMModel: ObservableObject {
                 let summary = TransferState.summary(url: saved, seconds: Date().timeIntervalSince(started))
                 DispatchQueue.main.async {
                     self.transfer = .finished("\(remote) → Guest/\(saved.lastPathComponent)\n\(summary)")
-                    LogCapture.shared.note("Файлы: \(remote) → \(saved.path), \(summary)")
+                    LogCapture.shared.note(L("Файлы: %@ → %@, %@", remote, saved.path, summary))
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.transfer = .failed(error.localizedDescription)
-                    LogCapture.shared.note("Файлы: \(remote) не получен — \(error.localizedDescription)")
+                    LogCapture.shared.note(L("Файлы: %@ не получен — %@", remote, error.localizedDescription))
                 }
             }
         }
@@ -500,6 +1002,7 @@ struct RootView: View {
     @State private var fullScreen = false
     @State private var pickFile = false
     @State private var pickIPA = false
+    @State private var pickDEB = false
     @State private var askPath = false
     @State private var guestPath = "/var/mobile/"
     /// Where the button sits, as a fraction of the view, so that it stays put
@@ -558,7 +1061,8 @@ struct RootView: View {
                         if !fullScreen {
                             GeometryReader { geo in
                                 ControlMenu(model: model, pane: $pane, fullScreen: $fullScreen,
-                                            pickFile: $pickFile, pickIPA: $pickIPA, askPath: $askPath)
+                                            pickFile: $pickFile, pickIPA: $pickIPA, pickDEB: $pickDEB,
+                                            askPath: $askPath)
                                     .position(menuPoint(in: geo))
                                     // Simultaneous, so a tap still opens the
                                     // menu and only a real drag moves it.
@@ -584,6 +1088,11 @@ struct RootView: View {
             .fileImporter(isPresented: $pickIPA, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result { model.installIPA(url) }
             }
+            // A third importer, for the same reason as the second: only one is
+            // ever presented, so they do not fight the way sheets would.
+            .fileImporter(isPresented: $pickDEB, allowedContentTypes: [.item]) { result in
+                if case .success(let url) = result { model.installDEB(url) }
+            }
             .alert(L("Забрать файл из гостя"), isPresented: $askPath) {
                 TextField(L("Путь в госте"), text: $guestPath)
                     .autocorrectionDisabled()
@@ -597,7 +1106,10 @@ struct RootView: View {
                 if let transfer = model.transfer {
                     TransferBanner(state: transfer) { model.transfer = nil }
                         .padding(.horizontal, 12)
-                        .padding(.bottom, 12)
+                        // Above the command line, not on top of it: the terminal
+                        // keeps its prompt at the bottom, and an install can run
+                        // for minutes with somebody waiting to type.
+                        .padding(.bottom, pane == .terminal ? 76 : 12)
                 }
             }
             // Coming back from StikDebug is exactly when the answer changes.
@@ -608,14 +1120,22 @@ struct RootView: View {
                 }
             }
         }
-        // The home indicator sits on top of the guest's own gesture area.
-        .persistentSystemOverlays(fullScreen ? .hidden : .automatic)
-        // Only while the guest is there to receive the swipes: the rest of the
-        // time the host's own gestures should behave normally.
-        .onAppear { SystemGestures.apply(deferEdges: model.isRunning) }
-        .onChange(of: model.isRunning) { running in
-            SystemGestures.apply(deferEdges: running)
-        }
+        // An ordinary app until full screen is asked for: the phone's own status
+        // bar at the top, and the home swipe doing what it always does. Full
+        // screen gives the guest the whole display, status bar included.
+        .statusBarHidden(fullScreen)
+        // And the edges: in full screen the first swipe goes to the guest and
+        // the second to the phone. The home indicator stays for that — hidden,
+        // iOS ignores the deferral, and full screen used to leave the home
+        // swipe a single one for exactly that reason.
+        .onAppear { applyEdges() }
+        .onChange(of: model.isRunning) { _ in applyEdges() }
+        .onChange(of: fullScreen) { _ in applyEdges() }
+    }
+
+    /// Only while the guest is running and has the whole screen.
+    private func applyEdges() {
+        SystemGestures.apply(deferEdges: model.isRunning && fullScreen)
     }
 }
 
@@ -625,6 +1145,9 @@ struct ControlMenu: View {
     @Binding var fullScreen: Bool
     @Binding var pickFile: Bool
     @Binding var pickIPA: Bool
+    @Binding var pickDEB: Bool
+    @State private var showPackages = false
+    @State private var showCatalog = false
     @Binding var askPath: Bool
     @State private var showSettings = false
     @State private var confirmQuit = false
@@ -669,6 +1192,25 @@ struct ControlMenu: View {
                 .disabled(!model.isRunning)
             }
 
+            Section(L("Патчи")) {
+                Button(L("Починить менеджер пакетов"), systemImage: "shippingbox") {
+                    model.repairPackages()
+                }
+                Button(L("Менеджер пакетов"), systemImage: "square.grid.2x2") {
+                    showPackages = true
+                }
+                Button(L("Каталог приложений"), systemImage: "square.and.arrow.down.on.square") {
+                    showCatalog = true
+                }
+                Button(L("Установить .deb в гостя…"), systemImage: "shippingbox.and.arrow.backward") {
+                    pickDEB = true
+                }
+                Button(L("Перезапустить SpringBoard"), systemImage: "arrow.clockwise") {
+                    model.respring()
+                }
+            }
+            .disabled(!model.isRunning || model.transfer?.isRunning == true)
+
             Section(L("Файлы")) {
                 Button(L("Отправить файл в гостя…"), systemImage: "square.and.arrow.up") {
                     pickFile = true
@@ -696,6 +1238,8 @@ struct ControlMenu: View {
             glassDisc
         }
         .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+        .sheet(isPresented: $showPackages) { PackagesView(model: model) }
+        .sheet(isPresented: $showCatalog) { CatalogView(model: model) }
         .confirmationDialog(L("Выключить машину?"), isPresented: $confirmQuit, titleVisibility: .visible) {
             Button(L("Выключить"), role: .destructive) { model.shutdown() }
             Button(L("Отмена"), role: .cancel) {}
@@ -723,7 +1267,12 @@ struct ControlMenu: View {
             // Clipped as well as shaped. While the menu opens, the glass is
             // handed to the presentation animation, and for a frame or two it
             // draws as the square it really is before the shape catches up.
-            face.glassEffect(.regular.interactive(), in: Circle())
+            //
+            // Plain glass, not `.interactive()`: interactive glass answers
+            // touches itself, and the control wearing it — a menu here, buttons
+            // on the credits card — loses the first tap to the glass. The press
+            // animation is not worth a control that has to be pressed twice.
+            face.glassEffect(.regular, in: Circle())
                 .clipShape(Circle())
                 .contentShape(Circle())
         } else {
@@ -904,6 +1453,11 @@ struct TerminalView: View {
     /// The shell channel is its own object, so watching the model alone would
     /// miss everything it does.
     @ObservedObject private var shell: ShellChannel
+    /// And so is the console: its text arrives on its own object, so a view
+    /// that watched only the model would redraw for everything except the one
+    /// thing it is here to show — which looked like a console that updates
+    /// whenever you leave it and come back.
+    @ObservedObject private var serial: SerialConsole
     @ObservedObject private var log = LogCapture.shared
     @ObservedObject private var settings = Settings.shared
     @StateObject private var screen = GuestScreen()
@@ -917,6 +1471,7 @@ struct TerminalView: View {
     init(model: VMModel) {
         _model = ObservedObject(wrappedValue: model)
         _shell = ObservedObject(wrappedValue: model.shell)
+        _serial = ObservedObject(wrappedValue: model.serial)
     }
 
     private var source: Source { Source(rawValue: sourceName) ?? .emulator }
@@ -925,7 +1480,7 @@ struct TerminalView: View {
         guard !command.isEmpty else { return }
         switch source {
         case .shell:  shell.send(command)
-        default:      model.serial.send(command + "\n")
+        default:      serial.send(command + "\n")
         }
         command = ""
     }
@@ -936,14 +1491,14 @@ struct TerminalView: View {
     private var acceptsInput: Bool {
         switch source {
         case .shell:        return shell.isUp
-        case .guestConsole: return model.serial.interactive
+        case .guestConsole: return serial.interactive
         case .emulator:     return false
         }
     }
 
     /// The indicator at the bottom belongs to whatever is on screen.
     private var linkIsGood: Bool {
-        source == .shell ? shell.isUp : model.serial.connected
+        source == .shell ? shell.isUp : serial.connected
     }
 
     /// Opening the pane is the request to open the channel. A failure is not
@@ -985,7 +1540,7 @@ struct TerminalView: View {
 
     @ViewBuilder
     private func consolePane(_ fitted: CGFloat) -> some View {
-        if model.serial.text.isEmpty {
+        if serial.text.isEmpty {
             Text(L("Ожидание вывода консоли…"))
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -1027,14 +1582,15 @@ struct TerminalView: View {
                         shell.connect()
                     }
                     .buttonStyle(.borderedProminent)
-                    // The console path needs no network at all, so it stays
-                    // offered even when the better one keeps failing.
-                    Button(L("Через консоль"), systemImage: "terminal") {
-                        shell.connectOverConsole()
+                    // The console is what the button above uses. This is the
+                    // other way round — worth offering when the kernel log is
+                    // noisy enough to get in the way.
+                    Button(L("Через сеть"), systemImage: "network") {
+                        shell.connectOverNetwork()
                     }
                     .buttonStyle(.bordered)
                 }
-                .disabled(!model.serial.interactive)
+                .disabled(!serial.interactive)
             }
             Spacer()
         }
@@ -1064,8 +1620,8 @@ struct TerminalView: View {
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: acceptsInput ? 60 : 72) }
             }
             .onAppear {
-                screen.rebuild(from: model.serial.text, hideKernel: settings.hideKernel,
-                               sequence: model.serial.sequence)
+                screen.rebuild(from: serial.text, hideKernel: settings.hideKernel,
+                               sequence: serial.sequence)
                 pin += 1
                 openShellIfNeeded()
             }
@@ -1073,13 +1629,13 @@ struct TerminalView: View {
                 pin += 1
                 openShellIfNeeded()
             }
-            .onChange(of: model.serial.sequence) { seq in
-                screen.feed(model.serial.chunk, sequence: seq)
+            .onChange(of: serial.sequence) { seq in
+                screen.feed(serial.chunk, sequence: seq)
             }
             .onChange(of: shell.state) { _ in pin += 1 }
             .onChange(of: settings.hideKernel) { on in
-                screen.rebuild(from: model.serial.text, hideKernel: on,
-                               sequence: model.serial.sequence)
+                screen.rebuild(from: serial.text, hideKernel: on,
+                               sequence: serial.sequence)
                 pin += 1
             }
 
@@ -1236,10 +1792,13 @@ struct TransferBanner: View {
                 Text(text).font(.footnote)
             }
             Spacer(minLength: 0)
-            if !state.isRunning {
-                Button(action: dismiss) {
-                    Image(systemName: "xmark").font(.footnote.weight(.semibold))
-                }
+            // Dismissable while it runs, too. The work carries on — this only
+            // takes the banner off the screen — and without it a long install
+            // sat on top of the terminal's command line with no way to move it,
+            // which is exactly when somebody wants to ask the guest what is
+            // going on.
+            Button(action: dismiss) {
+                Image(systemName: "xmark").font(.footnote.weight(.semibold))
             }
         }
         .padding(12)

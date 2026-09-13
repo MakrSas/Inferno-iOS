@@ -42,9 +42,20 @@ netlab/L/
 netlab/run-app/
 netlab/state/
 netlab/state-configured/
+netlab/state-xfer/
 # Записи прогонов — полезны, пока идёт работа, но это не исходники.
 netlab/*.log
 netlab/*.txt
+# Подписанные помощники для гостя: собираются из соседних .m/.c одной командой.
+netlab/nsio-ent
+netlab/beep
+netlab/rio
+netlab/sysnd
+netlab/cydoshim
+netlab/sbnet
+# The agent: its sources are netlab/agent/*.m, and build-agent.sh puts the
+# built binary beside them; the repository has no use for it.
+netlab/agent/agent
 run/
 logs/
 repro-logs/

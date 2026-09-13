@@ -4,21 +4,28 @@ import SwiftUI
 /// Everything the user can change without a rebuild.
 ///
 /// These are exactly the knobs that matter when something refuses to boot: how
-/// many cores, how much memory, whether TCG runs its vCPUs on separate threads.
+/// many cores, how much memory, how big the translation buffer is.
 /// Being able to bisect them on the device saves a build round-trip for every
 /// guess. The presentation knobs live here too, so that one screen holds
 /// everything and nothing has to be hunted for in a toolbar.
 final class Settings: ObservableObject {
     static let shared = Settings()
 
+    private init() {
+        // A count saved while 2 and 3 were still on offer would otherwise
+        // reach the command line, and leave the picker with nothing selected.
+        if cores < Settings.coreChoices[0] { cores = Settings.coreChoices[0] }
+    }
+
     // The machine
     @AppStorage("cores") var cores: Int = 4 {
         willSet { objectWillChange.send() }
     }
+    /// Nothing below 4: one core goes to the SEP, and with fewer than three
+    /// left beside it the SEP panics initialising its key store, so the guest
+    /// never boots. 2 and 3 used to be offered and only ever caught people out.
+    static let coreChoices = [4, 5, 7]
     @AppStorage("memory") var memory: String = "3G" {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("tcgThreads") var tcgThreads: String = "multi" {
         willSet { objectWillChange.send() }
     }
     /// Left at the middle of the range on purpose. Bigger is faster — measured
@@ -49,6 +56,9 @@ final class Settings: ObservableObject {
     @AppStorage("guestAudio") var guestAudio: Bool = false {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("autoRepairPackages") var autoRepairPackages: Bool = true {
+        willSet { objectWillChange.send() }
+    }
     @AppStorage("smoothUpscale") var smoothUpscale: Bool = true {
         willSet { objectWillChange.send() }
     }
@@ -64,6 +74,46 @@ final class Settings: ObservableObject {
         willSet { objectWillChange.send() }
     }
     @AppStorage("terminalFollow") var terminalFollow: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+
+    // What the guest is told about the battery
+    @AppStorage("guestBatteryReal") var guestBatteryReal: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("guestBatteryPercent") var guestBatteryPercent: Double = 69 {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("guestBatteryCharging") var guestBatteryCharging: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+
+    // What the guest's status bar is made to show
+    @AppStorage("statusBarMode") var statusBarMode: String = GuestStatusBar.Mode.phone.rawValue {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarCarrier") var statusBarCarrier: String = "vm_operator" {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarBars") var statusBarBars: Int = 4 {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarNetwork") var statusBarNetwork: Int = GuestStatusBar.Network.lte.rawValue {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarWifi") var statusBarWifi: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarWifiBars") var statusBarWifiBars: Int = 3 {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarSecondSIM") var statusBarSecondSIM: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarVPN") var statusBarVPN: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("statusBarAirplane") var statusBarAirplane: Bool = false {
         willSet { objectWillChange.send() }
     }
 
@@ -84,6 +134,10 @@ final class Settings: ObservableObject {
     var emulatorEnvironment: [String: String] {
         var env: [String: String] = [:]
         if vcpuPriority { env["INFERNO_VCPU_QOS"] = "interactive" }
+        // The audio hardware is described to the guest only when this is set: the drivers behind those
+        // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
+        // of them.
+        if guestAudio { env["INFERNO_AUDIO"] = "1" }
         return env
     }
 
@@ -91,7 +145,6 @@ final class Settings: ObservableObject {
         var c = VMConfig()
         c.cores = cores
         c.memory = memory
-        c.tcgThreads = tcgThreads
         c.tbSize = tbSize
         c.network = network
         c.headless = headless
@@ -180,6 +233,12 @@ struct SettingsView: View {
                     NavigationLink { NetworkSettings() } label: {
                         Label(L("Сеть"), systemImage: "network")
                     }
+                    NavigationLink { BatterySettings() } label: {
+                        Label(L("Батарея гостя"), systemImage: "battery.75percent")
+                    }
+                    NavigationLink { StatusBarSettings(model: model) } label: {
+                        Label(L("Строка состояния гостя"), systemImage: "antenna.radiowaves.left.and.right")
+                    }
                 }
 
                 Section {
@@ -211,6 +270,12 @@ struct SettingsView: View {
                 Section {
                     LabeledContent(L("Сборка"), value: BuildInfo.stamp)
                         .font(.footnote)
+                }
+
+                Section {
+                    NavigationLink { CreditsView() } label: {
+                        Label(L("Благодарности"), systemImage: "heart")
+                    }
                 }
             }
             .navigationTitle(L("Параметры"))
@@ -341,13 +406,7 @@ private struct MachineSettings: View {
         Form {
             Section {
                 Picker(L("Всего vCPU"), selection: $settings.cores) {
-                    ForEach([2, 3, 4, 5, 7], id: \.self) { Text("\($0)").tag($0) }
-                }
-                if settings.cores < 4 || settings.tcgThreads != "multi" {
-                    Label(L("Для Secure Enclave нужны 4 ядра И multi одновременно. При 2 ядрах или при single он паникует на инициализации хранилища ключей — проверено на обоих устройствах."),
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                    ForEach(Settings.coreChoices, id: \.self) { Text("\($0)").tag($0) }
                 }
                 if settings.cores > 4 {
                     Label(L("При 7 инициализация машины тратит ~1.4 ГБ только на служебные структуры."),
@@ -372,14 +431,134 @@ private struct MachineSettings: View {
             }
 
             Section {
+                Toggle(L("Чинить менеджер пакетов при запуске"), isOn: $settings.autoRepairPackages)
+            } header: {
+                Text(L("Патчи"))
+            } footer: {
+                Text(L("Перезагрузка гостя возвращает корень в режим «только чтение» и уносит корневого помощника, без которого Cydia отвечает «cydo returned an error code (2)». Это чинится заново при каждом запуске машины — секунды. Долгие шаги, нужные один раз на образ, остались на кнопке в меню."))
+            }
+
+            Section {
                 Toggle(L("Звук гостя (опыт)"), isOn: $settings.guestAudio)
             } header: {
                 Text(L("Звук"))
             } footer: {
-                Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Услышать пока нечего: в эмулируемой машине не хватает звукового сопроцессора, через который iOS выводит на динамик, — поэтому гость в эту дорожку ничего не шлёт. Тумблер есть, чтобы проверять сторону телефона, пока делается сторона машины. Применяется при запуске машины."))
+                Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Тумблер описывает машине звуковое железо — динамик, шину I2S и сопроцессор, — а без него гостю о звуке не сообщается вовсе. Пока опыт: гость собирает звуковое устройство, но маршрут вывода у него ещё не встаёт, и машина от этих драйверов заметно тяжелеет. Применяется при запуске машины."))
             }
         }
         .navigationTitle(L("Машина"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What the guest's battery shows.
+///
+/// The machine's SMC answers from whatever is set here, so the figure reaches
+/// everything in the guest — the status bar, its settings, its apps — rather
+/// than being painted over one of them.
+private struct BatterySettings: View {
+    @ObservedObject var settings = Settings.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Picker(L("Заряд"), selection: $settings.guestBatteryReal) {
+                    Text(L("Как на телефоне")).tag(true)
+                    Text(L("Свой")).tag(false)
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text(L("Телефон отдаёт приложениям заряд с шагом 5 %, точнее iOS не говорит никому. Гость получает это число через SMC машины и показывает его как свой собственный."))
+            }
+
+            if !settings.guestBatteryReal {
+                Section {
+                    LabeledContent(L("Заряд"), value: L("%d %%", Int(settings.guestBatteryPercent)))
+                    Slider(value: $settings.guestBatteryPercent, in: 0...100, step: 1)
+                    Toggle(L("Заряжается"), isOn: $settings.guestBatteryCharging)
+                } footer: {
+                    Text(L("Гость узнаёт о смене сразу же: машина будит его драйвер батареи, а не ждёт, пока он спросит сам. Молния в строке состояния появляется за пару секунд."))
+                }
+            }
+        }
+        .onChange(of: settings.guestBatteryReal) { _ in HostBattery.shared.start() }
+        .onChange(of: settings.guestBatteryPercent) { _ in HostBattery.shared.start() }
+        .onChange(of: settings.guestBatteryCharging) { _ in HostBattery.shared.start() }
+        .navigationTitle(L("Батарея гостя"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What the guest's status bar shows of a network it does not have.
+private struct StatusBarSettings: View {
+    @ObservedObject var model: VMModel
+    @ObservedObject var settings = Settings.shared
+
+    private var mode: GuestStatusBar.Mode { GuestStatusBar.Mode(rawValue: settings.statusBarMode) ?? .off }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker(L("Сеть"), selection: $settings.statusBarMode) {
+                    ForEach(GuestStatusBar.Mode.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text(L("Только картинка: у машины нет ни модема, ни Wi-Fi, интернет у гостя идёт по USB, и его приложения никакой сети не увидят. «Как на телефоне» повторяет, Wi-Fi это или сотовая сеть и какого поколения. Уровня сигнала iOS приложениям не сообщает, поэтому он показан полным."))
+            }
+
+            if mode != .off {
+                Section {
+                    TextField(L("Имя оператора"), text: $settings.statusBarCarrier)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    Text(L("Оператор"))
+                } footer: {
+                    Text(L("В строке состояния iPhone с вырезом имени оператора нет, так что там его не видно."))
+                }
+            }
+
+            if mode == .custom {
+                Section(L("Сотовая сеть")) {
+                    Stepper(L("Полоски: %d из 4", settings.statusBarBars), value: $settings.statusBarBars, in: 0...4)
+                    Picker(L("Тип сети"), selection: $settings.statusBarNetwork) {
+                        ForEach(GuestStatusBar.Network.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                }
+                Section {
+                    Toggle(L("Wi-Fi"), isOn: $settings.statusBarWifi)
+                    if settings.statusBarWifi {
+                        Stepper(L("Уровень Wi-Fi: %d из 3", settings.statusBarWifiBars),
+                                value: $settings.statusBarWifiBars, in: 0...3)
+                    }
+                } footer: {
+                    Text(L("Значок Wi-Fi встаёт на место подписи типа сети: у iOS это одно и то же место."))
+                }
+                Section(L("Значки")) {
+                    Toggle(L("Вторая SIM"), isOn: $settings.statusBarSecondSIM)
+                    Toggle(L("VPN"), isOn: $settings.statusBarVPN)
+                    Toggle(L("Авиарежим"), isOn: $settings.statusBarAirplane)
+                }
+            }
+
+            Section {
+                Button(L("Применить сейчас"), systemImage: "arrow.clockwise") { model.paintStatusBar(force: true) }
+                    .disabled(!model.isRunning)
+            } footer: {
+                Text(L("Применяется и само: при запуске машины, после перезагрузки гостя и при каждом изменении здесь."))
+            }
+        }
+        .onChange(of: settings.statusBarMode) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarCarrier) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarBars) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarNetwork) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarWifi) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarWifiBars) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarSecondSIM) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarVPN) { _ in model.paintStatusBar() }
+        .onChange(of: settings.statusBarAirplane) { _ in model.paintStatusBar() }
+        .navigationTitle(L("Строка состояния гостя"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -389,16 +568,6 @@ private struct TranslatorSettings: View {
 
     var body: some View {
         Form {
-            Section {
-                Picker(L("Потоки TCG"), selection: $settings.tcgThreads) {
-                    Text("multi").tag("multi")
-                    Text("single").tag("single")
-                }
-                .pickerStyle(.segmented)
-            } footer: {
-                Text(L("single оставлен для диагностики. Гость на нём не грузится: SEP и ядра AP должны двигаться одновременно."))
-            }
-
             Section {
                 Picker(L("Буфер трансляций"), selection: $settings.tbSize) {
                     ForEach([32, 64, 128, 256, 384, 512], id: \.self) { Text(L("%d МБ", $0)).tag($0) }
@@ -425,8 +594,8 @@ private struct DiagnosticsSettings: View {
             Section(L("Состояние")) {
                 Text(statusLine)
                 Text(jitLine)
-                Text(L("Параметры: %d vCPU, %@, tcg %@",
-                       Settings.shared.cores, Settings.shared.memory, Settings.shared.tcgThreads))
+                Text(L("Параметры: %d vCPU, %@",
+                       Settings.shared.cores, Settings.shared.memory))
             }
             .font(.footnote)
 

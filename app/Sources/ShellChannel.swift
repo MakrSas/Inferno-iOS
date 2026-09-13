@@ -86,24 +86,57 @@ final class ShellChannel: ObservableObject {
     /// The network is not waited for and the guest is not asked to bring it up:
     /// something else in the app already watches the link and does the asking,
     /// and a second voice only produced a screenful of `ipconfig` lines.
+    /// Always over the console.
+    ///
+    /// The network path is still here and still works, but it cannot be relied
+    /// on: it needs the guest to have an address and to call back, and when
+    /// either does not happen there is no shell at all — which is how this
+    /// looked from the outside, as a channel that simply never came up. The
+    /// console is there from the moment the bootstrap's bash is, and that is
+    /// worth more than not sharing it with the kernel log.
     func connect() {
         guard state != .connecting, !isUp else { return }
-        guard serial.interactive else {
-            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
-            return
-        }
 
         state = .connecting
         generation += 1
         let mine = generation
         release()
         screen.reset()
+        waitForConsole(mine, attempt: 0)
+    }
 
-        guard linkUp() else {
-            openConsole(mine, note: L("Сети у гостя нет — шелл идёт по консоли."))
+    /// Waits for bash to appear on the console instead of giving up on it.
+    ///
+    /// On a phone the guest can be minutes from power-on to a shell, and the
+    /// old behaviour — one look, then an error — meant the pane stayed empty
+    /// for the rest of the session unless somebody pressed a button.
+    private func waitForConsole(_ mine: Int, attempt: Int) {
+        guard mine == generation else { return }
+        if serial.interactive {
+            openConsole(mine, note: nil)
             return
         }
-        openNetwork(mine)
+        guard attempt < 150 else {
+            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.waitForConsole(mine, attempt: attempt + 1)
+        }
+    }
+
+    /// Over the network instead: no sharing with the kernel log, at the price
+    /// of needing the guest to have an address and to call back.
+    func connectOverNetwork() {
+        guard serial.interactive else {
+            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
+            return
+        }
+        state = .connecting
+        generation += 1
+        release()
+        screen.reset()
+        openNetwork(generation)
     }
 
     /// Opens the channel over the console explicitly, whatever the link says.
@@ -218,21 +251,26 @@ final class ShellChannel: ObservableObject {
         // One conversation: the two lines only mean anything together.
         let mark = marker
         DispatchQueue.global(qos: .userInitiated).async {
+            // One line, and it carries its own marker. Two lines could be
+            // separated by somebody else writing to the console between them,
+            // and a marker kept in a variable is lost the moment the guest's
+            // bash restarts — after which every command printed nothing and the
+            // pane looked dead.
             self.serial.exclusive {
-                self.serial.send("m=\(mark);s=S$m;e=E$m\n")
-                self.serial.send("echo \"$s\";echo ok;echo \"$e\"\n")
+                self.serial.send("m=\(mark); echo \"S$m\"; echo ok; echo \"E$m\"\n")
+            }
+            // The clock starts when the probe is actually sent, not when it is
+            // queued. Somebody else can hold the console for a minute — the
+            // repair at startup does — and a timeout measured from here used to
+            // expire before this shell had said a word.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+                guard let self, self.generation == mine, self.state == .connecting else { return }
+                self.release()
+                self.state = .failed(L("Шелл не отозвался на проверку. Похоже, на консоли не bash."))
             }
         }
 
-        if let note { LogCapture.shared.note("Шелл: " + note) }
-
-        // If the guest never answers the probe, the console is not carrying a
-        // shell that understands us.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
-            guard let self, self.generation == mine, self.state == .connecting else { return }
-            self.release()
-            self.state = .failed(L("Шелл не отозвался на проверку. Похоже, на консоли не bash."))
-        }
+        if let note { LogCapture.shared.note(L("Шелл: %@", note)) }
     }
 
     /// Shows what lies between the marks, and nothing else.
@@ -246,20 +284,42 @@ final class ShellChannel: ObservableObject {
 
             let text = String(decoding: line, as: UTF8.self)
             if text.contains("S" + marker) { inside = true; continue }
-            if text.contains("E" + marker) { inside = false; finished(); continue }
+            if let mark = text.range(of: "E" + marker) {
+                // The status rides on the end marker's own line, which is the
+                // only place it can be read without a prompt to look at.
+                let tail = text[mark.upperBound...].trimmingCharacters(in: .whitespaces)
+                inside = false
+                finished(code: Int(tail))
+                continue
+            }
             guard inside else { continue }
+            // The app's own machinery shares this console — the package repair,
+            // the agent install — and the tty echoes whatever it writes the
+            // moment it is written, even while this pane's command is still
+            // running. Those echoes land between our marks and are not what the
+            // user asked for. Everything that machinery sends carries the same
+            // marker assembly, and its answers carry the marker itself, so both
+            // are recognisable and neither belongs here.
+            if text.contains("v=VAL; t=") { continue }
+            if text.range(of: "VAL[0-9a-f]{4}", options: .regularExpression) != nil { continue }
             // The kernel can still write into the window; that much is filtered
             // the old way, by the shape of what it writes.
             screen.append(filter.process(text + "\r\n"))
         }
     }
 
-    private func finished() {
+    private func finished(code: Int?) {
         if state == .connecting {
             state = .up(.console)
             screen.append("\u{1B}[32m" + L("Канал по консоли открыт: показывается только вывод команд.")
                           + "\u{1B}[0m\r\n")
+            return
         }
+        // Without a prompt of its own, the pane gave no sign that a command had
+        // ended — and on a guest this slow, "still running" and "finished with
+        // nothing to say" look exactly alike.
+        guard let code else { return }
+        screen.append("\u{1B}[\(code == 0 ? "90" : "31")m" + L("— готово, код %d", code) + "\u{1B}[0m\r\n")
     }
 
     // MARK: - Talking
@@ -280,7 +340,9 @@ final class ShellChannel: ObservableObject {
             }
         case .console:
             screen.append("\u{1B}[36m# \u{1B}[0m" + command + "\r\n")
-            serial.send("echo \"$s\";{ \(command) ;} 2>&1;echo \"$e\"\n")
+            // The marker is set on this line too, for the same reason: nothing
+            // is remembered between commands.
+            serial.send("m=\(marker); echo \"S$m\"; { \(command) ;} 2>&1; r=$?; echo \"E$m $r\"\n")
         case nil:
             break
         }

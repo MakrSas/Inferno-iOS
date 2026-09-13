@@ -76,6 +76,6 @@ enum Threads {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let size = attrs[.size] as? Int
         else { return L("файла нет") }
-        return "\(size) байт"
+        return L("%d байт", size)
     }
 }

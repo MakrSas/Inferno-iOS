@@ -81,6 +81,61 @@ final class SerialConsole: ObservableObject {
         return true
     }
 
+    /// How many times the guest has fallen over since the app started.
+    ///
+    /// A kernel panic ends every conversation on this console at once, and
+    /// whoever was waiting for a package to finish would otherwise sit out the
+    /// whole timeout — half an hour — before finding out that there is nobody
+    /// left to answer. The guest says so plainly on its way down; this counts
+    /// the times it has, and the waiters compare the count against the one they
+    /// started with.
+    private let deathLock = NSLock()
+    private var deaths = 0
+    private var deathWhy = ""
+    private var lastDeath = Date.distantPast
+    /// The tail of the previous read, so a line split across two of them is
+    /// still recognised. Nothing looked for here is longer than one line.
+    private var deathTail = ""
+
+    var guestDeaths: Int {
+        deathLock.lock()
+        defer { deathLock.unlock() }
+        return deaths
+    }
+
+    var guestDeathReason: String {
+        deathLock.lock()
+        defer { deathLock.unlock() }
+        return deathWhy
+    }
+
+    /// Called on the main queue when the guest falls over, for whoever has to
+    /// set it up again once it comes back.
+    var onGuestDeath: (() -> Void)?
+
+    /// What a dying guest writes. `initproc exited` is a launchd that could not
+    /// go on — which is what installing a hooking runtime does to this image.
+    private static let deathMarks = ["panic(cpu ", "wdog panic", "initproc exited"]
+
+    private func watchForDeath(_ piece: String) {
+        let text = deathTail + piece
+        deathTail = String(text.suffix(120))
+        guard let line = text.split(separator: "\n", omittingEmptySubsequences: false).first(where: { line in
+            SerialConsole.deathMarks.contains { line.contains($0) }
+        }) else { return }
+
+        // A panic is a page of text, and the guest prints the whole of it again
+        // on the next boot. One report per fall is what a waiter needs.
+        guard Date().timeIntervalSince(lastDeath) > 60 else { return }
+        lastDeath = Date()
+
+        deathLock.lock()
+        deaths += 1
+        deathWhy = String(line.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+        deathLock.unlock()
+        DispatchQueue.main.async { self.onGuestDeath?() }
+    }
+
     /// Everyone who wants the console's output as it arrives. The file transfer
     /// picks its answers out of it.
     private let tapsLock = NSLock()
@@ -251,6 +306,7 @@ final class SerialConsole: ObservableObject {
         quiet = false
 
         let piece = String(decoding: bytes, as: UTF8.self)
+        watchForDeath(piece)
         DispatchQueue.main.async {
             self.text += piece
             if self.text.count > self.limit {

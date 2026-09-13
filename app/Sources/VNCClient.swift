@@ -54,7 +54,7 @@ final class VNCClient: GuestDisplay {
 
     private func report(_ new: GuestDisplayStatus) {
         switch new {
-        case .connected(let w, let h): LogCapture.shared.note("VNC: подключено, экран \(w)×\(h)")
+        case .connected(let w, let h): LogCapture.shared.note(L("VNC: подключено, экран %d×%d", w, h))
         case .failed(let why):         LogCapture.shared.note("VNC: \(why)")
         default:                       break
         }
@@ -71,7 +71,7 @@ final class VNCClient: GuestDisplay {
             attempt += 1
             if let problem = sock.connect(port: port) {
                 if attempt == 1 || attempt % 10 == 0 {
-                    LogCapture.shared.note("VNC: \(problem) — попытка \(attempt)")
+                    LogCapture.shared.note(L("VNC: %@ — попытка %d", problem, attempt))
                 }
                 Thread.sleep(forTimeInterval: 1)
                 continue
@@ -181,7 +181,7 @@ final class VNCClient: GuestDisplay {
             let encoding = Int32(bitPattern: rect.be32(at: 8))
 
             guard encoding == 0 else {
-                report(.failed("неподдерживаемая кодировка \(encoding)")); return false
+                report(.failed(L("неподдерживаемая кодировка %d", Int(encoding)))); return false
             }
             if w > 0, h > 0 {
                 guard let body = sock.readExactly(w * h * 4) else { return false }

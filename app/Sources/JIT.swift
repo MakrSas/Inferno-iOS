@@ -100,7 +100,7 @@ enum JIT {
 
         let addr = mmap(nil, size, prot, flags, -1, 0)
         guard addr != MAP_FAILED, let page = addr else {
-            return "\(name): mmap отказал (\(String(cString: strerror(errno))))"
+            return L("%@: mmap отказал (%@)", name, String(cString: strerror(errno)))
         }
         defer { munmap(page, size) }
 
@@ -109,7 +109,7 @@ enum JIT {
         memcpy(page, &code, code.count * 4)
 
         if let target = thenProtect, mprotect(page, size, target) != 0 {
-            return "\(name): mprotect отказал (\(String(cString: strerror(errno))))"
+            return L("%@: mprotect отказал (%@)", name, String(cString: strerror(errno)))
         }
 
         // Instructions written as data are invisible to the instruction cache.
@@ -120,7 +120,7 @@ enum JIT {
 
         let fn = unsafeBitCast(page, to: Fn.self)
         let result = fn()
-        return result == 42 ? "\(name): ВЫПОЛНЯЕТСЯ" : "\(name): вернул \(result), ожидалось 42"
+        return result == 42 ? L("%@: ВЫПОЛНЯЕТСЯ", name) : L("%@: вернул %d, ожидалось 42", name, Int(result))
     }
 
     /// Tries every way of getting executable memory and reports which ones the
@@ -134,19 +134,20 @@ enum JIT {
         let size = Int(getpagesize())
         var lines: [String] = []
 
-        lines.append("отлаживается: \(isBeingDebugged() ? "да" : "нет")")
+        lines.append(L("отлаживается: %@", isBeingDebugged() ? L("да") : L("нет")))
 
         func attempt(_ name: String, prot: Int32, flags: Int32, thenExec: Bool = false) {
             let addr = mmap(nil, size, prot, flags, -1, 0)
             if addr == MAP_FAILED {
-                lines.append("\(name): нет (\(String(cString: strerror(errno))))")
+                lines.append(L("%@: нет (%@)", name, String(cString: strerror(errno))))
                 return
             }
             if thenExec {
                 let rc = mprotect(addr, size, PROT_READ | PROT_WRITE | PROT_EXEC)
-                lines.append("\(name): \(rc == 0 ? "да" : "нет (mprotect: \(String(cString: strerror(errno))))")")
+                lines.append(L("%@: %@", name, rc == 0 ? L("да")
+                                        : L("нет (mprotect: %@)", String(cString: strerror(errno)))))
             } else {
-                lines.append("\(name): да")
+                lines.append(L("%@: да", name))
             }
             munmap(addr, size)
         }
@@ -210,8 +211,8 @@ enum JIT {
 
         if status != previous {
             switch status {
-            case .available(let how):    LogCapture.shared.note("JIT: доступен (\(how))")
-            case .unavailable(let why):  LogCapture.shared.note("JIT: НЕДОСТУПЕН — \(why)")
+            case .available(let how):    LogCapture.shared.note(L("JIT: доступен (%@)", how))
+            case .unavailable(let why):  LogCapture.shared.note(L("JIT: НЕДОСТУПЕН — %@", why))
             }
         }
         return status
