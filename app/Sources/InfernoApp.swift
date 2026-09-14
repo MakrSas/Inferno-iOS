@@ -194,6 +194,7 @@ final class VMModel: ObservableObject {
         QemuBridge.shared.onStateChange = { [weak self] state in
             guard let self else { return }
             self.qemuState = state
+            if state != .running { HostHaptics.shared.stop() }
             if state == .running {
                 // Give qemu_init time to open its sockets.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -221,6 +222,9 @@ final class VMModel: ObservableObject {
                 // The library is loaded by now, so the battery can be handed
                 // over before the guest's driver first asks for it.
                 HostBattery.shared.start()
+                // Nothing arrives until the guest vibrates, and nothing at all
+                // from a guest started without sound.
+                HostHaptics.shared.start()
                 // The status bar: once SpringBoard is up, and again whenever the
                 // phone's own connection changes while the guest follows it.
                 PhoneNetwork.shared.onChange = { [weak self] in

@@ -560,6 +560,14 @@ enum L10n {
         ("от батареи", "on battery"),
         ("Батарея: в этой сборке библиотеки её нет, гость видит 69 %.",
             "Battery: this build of the library does not have it; the guest sees 69 %."),
+        // The guest's vibration, played on the phone
+        ("Вибрация гостя", "Guest vibration"),
+        ("Когда гость вибрирует, вибрирует и телефон: машина читает сигнал, которым гость раскачивает свой актуатор, и Taptic Engine повторяет его — в те же моменты, той же длины и той же резкости. Актуатор входит в звуковое железо гостя, поэтому без «Звука гостя» вибрации нет. Переключается сразу, без перезапуска машины.",
+            "When the guest vibrates, so does the phone: the machine reads the signal the guest drives its actuator with, and the Taptic Engine follows it — at the same moments, for as long, and as sharp. The actuator is part of the guest's audio hardware, so there is no vibration without “The guest's sound”. Takes effect at once, without restarting the machine."),
+        ("Вибрация: в этой сборке библиотеки её нет.", "Vibration: this build of the library does not have it."),
+        ("Вибрация: гость включил актуатор — уровень %.2f, %.0f Гц",
+            "Vibration: the guest drove its actuator — level %.2f, %.0f Hz"),
+        ("Вибрация: Core Haptics не запустился — %@", "Vibration: Core Haptics did not start — %@"),
 
         // The guest agent
         ("Агент: %@", "Agent: %@"),

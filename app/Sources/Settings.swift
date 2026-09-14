@@ -65,6 +65,12 @@ final class Settings: ObservableObject {
     @AppStorage("guestAudio") var guestAudio: Bool = false {
         willSet { objectWillChange.send() }
     }
+    /// Whether the guest's vibration is played on the phone's taptic engine.
+    /// On by default: without guest audio there is no actuator to follow, and
+    /// where the device has no taptic engine nothing starts at all.
+    @AppStorage("guestHaptics") var guestHaptics: Bool = true {
+        willSet { objectWillChange.send() }
+    }
     @AppStorage("autoRepairPackages") var autoRepairPackages: Bool = true {
         willSet { objectWillChange.send() }
     }
@@ -582,6 +588,19 @@ private struct MachineSettings: View {
                 Text(L("Звук"))
             } footer: {
                 Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Тумблер описывает машине звуковое железо — динамик, шину I2S и сопроцессор, — а без него гостю о звуке не сообщается вовсе. Пока опыт: гость собирает звуковое устройство, но маршрут вывода у него ещё не встаёт, и машина от этих драйверов заметно тяжелеет. Применяется при запуске машины."))
+            }
+
+            // Nothing to switch where there is no taptic engine to play on.
+            if HostHaptics.isSupported {
+                Section {
+                    Toggle(L("Вибрация гостя"), isOn: $settings.guestHaptics)
+                        .disabled(!settings.guestAudio)
+                        .onChange(of: settings.guestHaptics) { on in
+                            if on { HostHaptics.shared.start() } else { HostHaptics.shared.stop() }
+                        }
+                } footer: {
+                    Text(L("Когда гость вибрирует, вибрирует и телефон: машина читает сигнал, которым гость раскачивает свой актуатор, и Taptic Engine повторяет его — в те же моменты, той же длины и той же резкости. Актуатор входит в звуковое железо гостя, поэтому без «Звука гостя» вибрации нет. Переключается сразу, без перезапуска машины."))
+                }
             }
         }
         .navigationTitle(L("Машина"))
