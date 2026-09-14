@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Without these AMFI kills the binary before main(), the same as every
+	     other helper carried into this guest. -->
+	<key>platform-application</key>
+	<true/>
+	<key>com.apple.private.security.no-container</key>
+	<true/>
+	<!-- The HAL lives behind these services; without the exceptions the probe
+	     is refused before it can ask anything. Same list the rio probe uses. -->
+	<key>com.apple.security.exception.mach-lookup.global-name</key>
+	<array>
+		<string>com.apple.audio.AudioSession</string>
+		<string>com.apple.audio.audiohald</string>
+		<string>com.apple.coremedia.audiodeviceclock</string>
+	</array>
+	<!-- Opening an IOKit user client is gated on naming its class here. The
+	     kernel in this guest takes our own signatures, so the probe may hold
+	     what the audio server holds. -->
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOAudio2DeviceUserClient</string>
+		<string>AppleAOPAudioUserClient</string>
+	</array>
+	<key>com.apple.private.kernel.audio_latency</key>
+	<true/>
+	<key>com.apple.private.aop-audio.user-access</key>
+	<true/>
+	<key>com.apple.private.audio.hal.aop-audio.user-access</key>
+	<true/>
+</dict>
+</plist>
