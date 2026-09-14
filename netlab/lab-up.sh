@@ -61,6 +61,18 @@ case "${GUI:-none}" in
     *)   DISPLAY_ARG="${GUI:-none}" ;;
 esac
 
+# Which accelerator runs the guest. The emulator is signed for the hypervisor, so
+# on an Apple Silicon host the machine can run virtualised, which is minutes
+# rather than tens of minutes per experiment. TCG stays the default: it is what
+# the phone uses, and some bugs only show there.
+#
+#   ACCEL=hvf  virtualised, the fast path
+#   (unset)    TCG, the same execution the phone gets
+case "${ACCEL:-tcg}" in
+    hvf) ACCEL_ARG="hvf" ;;
+    *)   ACCEL_ARG="tcg,thread=multi,tb-size=${TB:-128}${SPLITWX:+,split-wx=$SPLITWX}" ;;
+esac
+
 # What the machine's sound card is wired to. Named with -global, because the MCA
 # is created by the machine and cannot be given the property any other way — and
 # in the long form, because the short one (`-global driver=apple.mca,property=audiodev,value=snd`)
@@ -77,11 +89,21 @@ case "${SOUND:-}" in
     *)   AUDIO="" ;;
 esac
 
+# GMALLOC=1 runs the emulator under Guard Malloc: every allocation ends against a guard
+# page and freed memory is unmapped, so the first write past the end of a buffer, or into
+# one already freed, stops the process right there, and the crash report in
+# ~/Library/Logs/DiagnosticReports names the writer. Slow, and hungry for memory. It is set
+# here rather than by the caller because macOS strips DYLD_* from the environment of
+# /bin/bash, which is what runs this script.
+if [ -n "${GMALLOC:-}" ]; then
+    export DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib MALLOC_STRICT_SIZE=1
+fi
+
 rm -f "$QMP"
 D="$STAGE/InfernoData"
 "$QEMU" \
   -L "$LAB/L" -L /opt/homebrew/share/qemu -L "$SRC/build-macos/qemu-bundle/opt/homebrew/share/qemu" \
-  -accel "tcg,thread=multi,tb-size=${TB:-128}${SPLITWX:+,split-wx=$SPLITWX}" \
+  -accel "$ACCEL_ARG" \
   -M "t8030${DISP:+,$DISP}${USBCONN:+,usb-conn-type=unix,usb-conn-addr=$SOCK},trustcache=$D/Restore/Firmware/038-44135-124.dmg.trustcache,ticket=$D/root_ticket.der,sep-fw=$D/sep-firmware.n104.RELEASE.new.img4,sep-rom=$STAGE/AppleSEPROM-Cebu-B1,kaslr-off=true,boot-mode=exit_recovery" \
   -kernel "$D/Restore/kernelcache.release.iphone12b" \
   -dtb "$D/Restore/Firmware/all_flash/DeviceTree.n104ap.im4p" \
