@@ -99,6 +99,10 @@ inferno-src/
 # Второе дерево QEMU, для опытов с вибрацией. Тоже отдельный клон.
 inferno-haptics/
 
+# Profiles from instrumented (-Db_pgo=generate) runs of the emulator.
+*.profraw
+*.profdata
+
 # Python
 __pycache__/
 *.pyc

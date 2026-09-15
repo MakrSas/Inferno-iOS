@@ -83,8 +83,9 @@ in English or Russian. Anything goes — see [Issues and ideas](#issues-and-idea
 - **No dependency resolution.** The package manager installs what you pick and shows dpkg's
   complaint as it is. Repositories that publish only `.zst` indexes do not open: iOS has nothing
   to decompress them with.
-- **No sound yet.** There is an experimental switch: the guest builds its speaker device, but the
-  output route never comes up, so nothing plays.
+- **Sound is experimental**, and off by default. With the switch on, the guest plays, pauses and
+  records, and its vibration reaches the phone; without it the machine boots faster and idles
+  lighter, since the audio hardware is not described to the guest at all.
 - **The guest sometimes drops its own network** after using it — a known iOS behaviour, worked
   around by asking it to bring the interface back up.
 

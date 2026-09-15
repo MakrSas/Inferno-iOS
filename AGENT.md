@@ -1,6 +1,6 @@
 # Агент в госте: автоматика мимо консоли
 
-> Что сделано по `GUEST-AGENT-PROMPT.md`. Всё, что помечено **проверено**,
+> Как устроен агент и что о нём известно. Всё, что помечено **проверено**,
 > прогнано на стенде; номера строк актуальны на момент записи.
 
 ## Зачем
@@ -159,7 +159,7 @@ error`):
 ## Проверка на стенде
 
 ```bash
-# поднять гостя с xfer (см. TRANSFER.md про EXTRA)
+# поднять гостя с namespace xfer: netlab/lab-up.sh, -device в EXTRA
 # клиент протокола с хоста:
 python3 netlab/agenttest.py --image netlab/state-*/xfer ping
 python3 netlab/agenttest.py --image netlab/state-*/xfer exec 'uptime'
