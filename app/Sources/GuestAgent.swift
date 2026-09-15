@@ -29,7 +29,6 @@ final class GuestAgent {
     // The layout, matching agent.h. All offsets and the header block are 4 KiB
     // aligned because the guest reads this as a raw block device, which takes
     // nothing else.
-    private static let blockSize = 4096
     private static let headerSize = 64
     private static let headerBlock = 4096
     private static let reqOffset = 0
@@ -42,9 +41,6 @@ final class GuestAgent {
     private static let proto: UInt32 = 1
     private static let reqMagic = Array("INFAGREQ".utf8)
     private static let rspMagic = Array("INFAGRSP".utf8)
-    // F_NOCACHE keeps the app's own reads of the backing file from being served
-    // stale out of the page cache while the emulator writes it uncached.
-    private static let fNoCache: Int32 = 48
 
     let image: URL
     let capacity: Int64
@@ -96,7 +92,10 @@ final class GuestAgent {
     func request(_ body: [String: Any], timeout: TimeInterval) -> [String: Any]? {
         lock.lock()
         defer { lock.unlock() }
-        guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        // A body longer than its region would run on into the response header.
+        guard let payload = try? JSONSerialization.data(withJSONObject: body),
+              payload.count <= Self.reqSize - Self.headerBlock
+        else { return nil }
         seq &+= 1
         let mySeq = seq
 
@@ -303,6 +302,8 @@ final class GuestAgent {
         } catch { return nil }
     }
 
+    /// Keeps the app's own reads of the backing file from being served stale out
+    /// of the page cache while the emulator writes it uncached.
     private static func uncached(_ fd: Int32) { _ = fcntl(fd, F_NOCACHE, 1) }
 
     /// The file's real size, following symlinks (which `FileManager` does not).

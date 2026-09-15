@@ -419,7 +419,7 @@ enum GuestPackages {
     /// first; here it is a menu entry for the same reason.
     static func respring(serial: SerialConsole) throws {
         try awaitShell(serial)
-        try serial.exclusive {
+        serial.exclusive {
             let shell = GuestShell(serial: serial)
             shell.line("killall -9 SpringBoard", timeout: 120)
         }

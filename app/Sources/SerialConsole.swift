@@ -65,6 +65,7 @@ final class SerialConsole: ObservableObject {
 
     /// Runs a sequence of commands with the console to itself. Blocks; never
     /// call it from the main thread.
+    @discardableResult
     func exclusive<T>(_ body: () throws -> T) rethrows -> T {
         conversation.lock()
         defer { conversation.unlock() }

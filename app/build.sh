@@ -3,6 +3,13 @@
 # dylib, ad-hoc signs everything and zips it into an installable payload.
 set -euo pipefail
 
+# A library path from the shell's profile (DYLD_LIBRARY_PATH=/opt/homebrew/lib is
+# a common one) reaches actool's ibtoold, and on a case-insensitive disk
+# Homebrew's libpng.dylib then stands in for ImageIO's own libPng.dylib: ibtoold
+# dies with a bus error reading the first PNG and actool exits 255 without a
+# word. Nothing here needs such a path.
+unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/.build"
 # Собранный вручную .ipa кладётся в корень проекта: туда за ним приходят руками,
@@ -109,9 +116,9 @@ cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 #
 #   Inferno.icon   — Icon Composer's bundle, iOS 26's Liquid Glass layers.
 #                    Only actool from Xcode 26+ can compile it.
-#   Assets.xcassets — a flat PNG catalog rendered from the same artwork
-#                    (scripts/render-icon.py), for older Xcode. Works
-#                    everywhere but does not get the glass treatment.
+#   Assets.xcassets — a flat PNG catalog rendered from the same artwork,
+#                    for older Xcode. Works everywhere but does not get the
+#                    glass treatment.
 #
 # Local builds get the real one; INFERNO_NO_ICON=1 skips both (app ships
 # with no icon at all).
@@ -137,8 +144,10 @@ PY
 ICON="$ROOT/Resources/Inferno.icon"
 FALLBACK_ICON="$ROOT/Resources/Assets.xcassets"
 if [ -z "${INFERNO_NO_ICON:-}" ]; then
+    # The probe compiles into the build directory, not /tmp, so nothing is left behind.
+    mkdir -p "$BUILD/actool-probe"
     if [ -d "$ICON" ] && xcrun actool --version >/dev/null 2>&1 && \
-       xcrun actool --compile /tmp --app-icon Inferno "$ICON" >/tmp/actool-probe.log 2>&1; then
+       xcrun actool --compile "$BUILD/actool-probe" --app-icon Inferno "$ICON" >"$BUILD/actool-probe.log" 2>&1; then
         echo "==> Иконка (Icon Composer)"
         compile_icon "$ICON" Inferno
     elif [ -d "$FALLBACK_ICON" ]; then

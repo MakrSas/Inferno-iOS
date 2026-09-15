@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the emulator's dependencies for arm64 iOS into a single prefix — the
-# same set as README-iOS.md's "Dependencies built for iOS", but reproducibly
+# same set README.md's "Building" lists, but reproducibly
 # and with no human in the loop. Used by CI (.github/workflows), but also runs
 # locally:
 #

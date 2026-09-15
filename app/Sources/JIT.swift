@@ -64,17 +64,6 @@ enum JIT {
         return true
     }
 
-    /// The fallback the emulator uses when MAP_JIT is refused: a debugged
-    /// process is allowed ordinary executable mappings.
-    private static func canAllocatePlainRWX() -> Bool {
-        let size = Int(getpagesize())
-        let addr = mmap(nil, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-        guard addr != MAP_FAILED else { return false }
-        munmap(addr, size)
-        return true
-    }
-
     /// What a debugger-enabled process is actually allowed: write to a page,
     /// then hand it execute permission. QEMU builds its mirror mapping on top
     /// of exactly this.

@@ -9,11 +9,6 @@ import Darwin
 /// the address belongs to a loaded image, and returns nothing when it points
 /// into a JIT buffer.
 enum Sampler {
-    private struct ThreadSample {
-        var thread: thread_t
-        var cpuSeconds: Double
-    }
-
     private static func cpuTime(_ thread: thread_t) -> Double? {
         var info = thread_basic_info()
         var size = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)

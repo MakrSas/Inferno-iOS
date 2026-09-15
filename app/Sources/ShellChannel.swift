@@ -141,18 +141,6 @@ final class ShellChannel: ObservableObject {
         openNetwork(generation)
     }
 
-    /// Opens the channel over the console explicitly, whatever the link says.
-    func connectOverConsole() {
-        guard serial.interactive else {
-            state = .failed(L("Шелл гостя не отвечает: на консоли должен сидеть bash из бутстрапа."))
-            return
-        }
-        state = .connecting
-        generation += 1
-        release()
-        screen.reset()
-        openConsole(generation, note: nil)
-    }
 
     // MARK: - Over the network
 

@@ -48,7 +48,6 @@ enum GuestDisplayStatus: Equatable {
 /// The alternative, copying the whole screen for each frame, is what the VNC
 /// path already does and what this is here to avoid.
 final class EmbeddedDisplay: GuestDisplay {
-    private typealias VoidFn = @convention(c) () -> Void
     private typealias ReadFn = @convention(c) (UnsafeMutableRawPointer?, Int, UnsafeMutablePointer<UInt32>?) -> Int32
     private typealias TouchFn = @convention(c) (Int32, Int32, Bool) -> Void
     private typealias KeyFn = @convention(c) (UInt32, Bool) -> Void

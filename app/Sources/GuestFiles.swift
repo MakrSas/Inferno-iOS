@@ -52,8 +52,6 @@ final class GuestFiles {
 
     /// Where received files land: the app's Documents, so they show up in Files.
     static var inbox: URL { VMConfig.documents.appendingPathComponent("Guest") }
-    /// Where sent files land in the guest.
-    static let guestDirectory = "/var/mobile/Inferno"
     /// The guest's name for this app, as slirp presents it.
     private static let hostAddress = "10.0.2.2"
 
